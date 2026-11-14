@@ -15,6 +15,7 @@
 	"files": [
 		"src",
 		"types",
+		"assets",
 		"README.md"
 	],
 	"pi": {

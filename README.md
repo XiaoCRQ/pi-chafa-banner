@@ -57,6 +57,12 @@ pi -e .
 pi -e /path/to/pi-chafa-banner
 ```
 
+The artwork ships inside the repo at `assets/banner.gif` (a copy of
+`~/Pictures/logo/v-1.gif`), so a fresh clone renders immediately. To use your
+own image, either replace `assets/banner.gif` or point `PI_BANNER_GIF` at any
+`.gif` (see [Configuration](#configuration)); the path is resolved per process,
+so no rebuild or reinstall is needed.
+
 The repo ships a user-facing test command that sets the environment, prints the
 effective flags, then starts pi from the repo root:
 
@@ -66,7 +72,7 @@ bash scripts/demo.sh                 # animate with defaults
 bash scripts/demo.sh --static        # one frame, no timer
 bash scripts/demo.sh --fps 12        # slower animation
 bash scripts/demo.sh --size 60x30    # larger canvas
-bash scripts/demo.sh --gif ~/Pictures/logo/v-1.gif
+bash scripts/demo.sh --gif ~/Pictures/logo/v-1.gif   # try another gif
 ```
 
 `demo.sh` only launches an interactive pi (use `/exit` or Ctrl-C to leave); it
@@ -109,7 +115,7 @@ Everything is environment variables — no settings file is written or read.
 
 | variable | default | meaning |
 | --- | --- | --- |
-| `PI_BANNER_GIF` | `~/.pi/agent/banner.gif`, else `~/Pictures/logo/v-1.gif` | GIF to animate |
+| `PI_BANNER_GIF` | `assets/banner.gif` in this package, else `~/.pi/agent/banner.gif`, else `~/Pictures/logo/v-1.gif` | GIF to animate (absolute, or relative to the current directory) |
 | `PI_BANNER_SIZE` | `44x22` | chafa canvas, `WIDTHxHEIGHT` (width 8–160, height 4–60) |
 | `PI_BANNER_FPS` | `16` | animation frames per second (1–30) |
 | `PI_BANNER_STRIDE` | `3` | keep every Nth GIF frame (1–10); 57 frames ÷ 3 = 19 kept |
@@ -175,7 +181,7 @@ Key details, because they are not obvious:
 | symptom | cause / fix |
 | --- | --- |
 | `IMAGE unavailable: missing chafa, ffmpeg on PATH` | install both: `apt install chafa ffmpeg` / `brew install chafa ffmpeg`, then `/splash rebuild` |
-| `IMAGE unavailable: cannot read <path>: ENOENT` | set `PI_BANNER_GIF` to a real gif, or drop one at `~/.pi/agent/banner.gif` |
+| `IMAGE unavailable: cannot read <path>: ENOENT` | `PI_BANNER_GIF` points at a missing file, or the bundled `assets/banner.gif` was deleted: restore it, or drop a gif at `~/.pi/agent/banner.gif` |
 | `preview: missing required tool …` (exit 2) | same fix; or preview the fallback with `--no-frames` |
 | art looks stale after editing the gif | cache key is `sha1(path + mtime + size)`; `/splash rebuild` or touch the file |
 | art is too big / cropped | lower `PI_BANNER_SIZE` (e.g. `40x18`) or make the terminal taller; short terminals crop from the top |

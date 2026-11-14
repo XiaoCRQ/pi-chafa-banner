@@ -1,9 +1,9 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
-import { DEFAULTS, type BannerConfig } from "../src/config.ts";
+import { BUNDLED_GIF_PATH, DEFAULTS, type BannerConfig } from "../src/config.ts";
 import {
 	cacheRoot,
 	chafaColorArgs,
@@ -74,7 +74,7 @@ describe("gifHash", () => {
 	});
 
 	test("is stable for the same file", async () => {
-		const gif = join(homedir(), "Pictures/logo/v-1.gif");
+		const gif = BUNDLED_GIF_PATH;
 		if (!existsSync(gif)) return;
 		const first = await gifHash(gif);
 		const second = await gifHash(gif);
@@ -96,7 +96,7 @@ describe("cache paths", () => {
 	});
 
 	test("are keyed by gif hash, size and color mode", async () => {
-		const gif = join(homedir(), "Pictures/logo/v-1.gif");
+		const gif = BUNDLED_GIF_PATH;
 		if (!existsSync(gif)) return;
 		const path = await frameCachePath(gif, { width: 44, height: 22 }, "truecolor");
 		expect(path.startsWith("/tmp/pi-chafa-test-agent/tmp/pi-chafa-banner/")).toBe(true);
@@ -109,7 +109,7 @@ describe("cache paths", () => {
 	});
 });
 
-const gifPath = join(homedir(), "Pictures/logo/v-1.gif");
+const gifPath = BUNDLED_GIF_PATH;
 const hasTools = (await preflight()).ok;
 const hasGif = existsSync(gifPath);
 

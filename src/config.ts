@@ -6,7 +6,8 @@
 
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
+import { fileURLToPath } from "node:url"
 
 export interface BannerSize {
 	width: number;
@@ -86,12 +87,25 @@ export function formatSize(size: BannerSize): string {
 	return `${size.width}x${size.height}`;
 }
 
+// Asset paths are resolved relative to this module, not process.cwd(): pi may
+// be started from anywhere, and `pi -e <repo>` / a global install must still
+// find the bundled art.
+const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
+export const PACKAGE_ROOT = dirname(MODULE_DIR);
+/** Gif shipped with the package; the out-of-the-box default artwork. */
+export const BUNDLED_GIF_PATH = join(PACKAGE_ROOT, "assets", "banner.gif");
+
 /**
- * Resolve the gif to animate. Order: explicit env, a per-user drop-in at
- * ~/.pi/agent/banner.gif, then the demo gif shipped on this machine. Returning
- * undefined lets the caller degrade to the builtin header with a notice.
+ * Resolve the gif to animate. Order: explicit env, the gif bundled with this
+ * package, a per-user drop-in at ~/.pi/agent/banner.gif, then the original
+ * ~/Pictures/logo/v-1.gif the bundle was copied from (keeps old checkouts
+ * working). Returning undefined lets the caller degrade to the builtin header
+ * with a notice.
  */
-export function defaultGifPath(env: NodeJS.ProcessEnv = process.env): string | undefined {
+export function defaultGifPath(
+	env: NodeJS.ProcessEnv = process.env,
+	bundled: string = BUNDLED_GIF_PATH,
+): string | undefined {
 	// An explicit setting always wins, even if the file is missing: silently
 	// animating a different gif than the user asked for is worse than a clear
 	// "cannot read <path>" diagnostic from frames.ts.
@@ -100,10 +114,11 @@ export function defaultGifPath(env: NodeJS.ProcessEnv = process.env): string | u
 		const expanded = expandHome(explicit);
 		return isAbsolute(expanded) ? expanded : join(process.cwd(), expanded);
 	}
+	if (existsSync(bundled)) return bundled;
 	const candidates = [join(piAgentDir(env), "banner.gif"), join(homedir(), "Pictures", "logo", "v-1.gif")];
 	for (const candidate of candidates) if (existsSync(candidate)) return candidate;
-	// Nothing on disk: return the drop-in location so status output is helpful.
-	return candidates[0];
+	// Nothing on disk: return the bundled location so status output is helpful.
+	return bundled;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): BannerConfig {

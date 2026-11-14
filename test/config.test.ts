@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
 	BANNER_MAX_WIDTH,
+	BUNDLED_GIF_PATH,
 	clamp,
 	DEFAULTS,
+	defaultGifPath,
 	describeConfig,
 	expandHome,
 	formatSize,
@@ -14,6 +16,7 @@ import {
 	piAgentDir,
 } from "../src/config.ts";
 import { homedir } from "node:os";
+import { join } from "node:path";
 
 describe("clamp", () => {
 	test("bounds values", () => {
@@ -108,6 +111,29 @@ describe("loadConfig", () => {
 		const fast = loadConfig({ PI_CODING_AGENT_DIR: "/tmp/pi-agent", PI_BANNER_FPS: "999", PI_BANNER_STRIDE: "99" });
 		expect(fast.fps).toBe(LIMITS.fps.max);
 		expect(fast.stride).toBe(LIMITS.stride.max);
+	});
+});
+
+describe("defaultGifPath", () => {
+	test("prefers the bundled artwork over every home-directory location", () => {
+		// The repo ships assets/banner.gif precisely so a fresh clone renders with
+		// no setup; an unrelated ~/Pictures/logo/v-1.gif must not win over it.
+		expect(defaultGifPath({}, BUNDLED_GIF_PATH)).toBe(BUNDLED_GIF_PATH);
+	});
+
+	test("explicit PI_BANNER_GIF always wins, resolved against cwd", () => {
+		expect(defaultGifPath({ PI_BANNER_GIF: "/tmp/demo.gif" }, BUNDLED_GIF_PATH)).toBe("/tmp/demo.gif");
+		const relative = defaultGifPath({ PI_BANNER_GIF: "art/x.gif" }, BUNDLED_GIF_PATH);
+		expect(relative).toBe(join(process.cwd(), "art/x.gif"));
+	});
+
+	test("falls back to a home-directory copy when the bundled gif is absent", () => {
+		const resolved = defaultGifPath({ PI_CODING_AGENT_DIR: "/tmp/pi-agent-empty" }, "/nonexistent/banner.gif");
+		// Drop-in first, then the machine's original artwork; never the missing bundle.
+		expect([
+			join("/tmp/pi-agent-empty", "banner.gif"),
+			join(homedir(), "Pictures", "logo", "v-1.gif"),
+		]).toContain(resolved ?? "");
 	});
 });
 

@@ -5,7 +5,7 @@
 #   bash scripts/demo.sh --static        # one frame, no timer
 #   bash scripts/demo.sh --fps 12        # slower animation
 #   bash scripts/demo.sh --size 60x30    # bigger chafa canvas
-#   bash scripts/demo.sh --gif ~/Pictures/logo/v-1.gif
+#   bash scripts/demo.sh --gif ~/Pictures/logo/v-1.gif   # override the bundled art
 #
 # Everything is passed to pi through PI_BANNER_* environment variables, so the
 # extension needs no settings file. This script only starts an interactive pi;
@@ -120,7 +120,7 @@ fi
 echo "pi-chafa-banner demo"
 echo "  repo:  $REPO_ROOT"
 echo "  flags: ${ORIGINAL_ARGS[*]:-<none>}"
-echo "  env:   PI_BANNER_STATIC=${PI_BANNER_STATIC:-0} PI_BANNER_FPS=${PI_BANNER_FPS:-16} PI_BANNER_SIZE=${PI_BANNER_SIZE:-44x22} PI_BANNER_GIF=${PI_BANNER_GIF:-<auto: ~/.pi/agent/banner.gif or ~/Pictures/logo/v-1.gif>}"
+echo "  env:   PI_BANNER_STATIC=${PI_BANNER_STATIC:-0} PI_BANNER_FPS=${PI_BANNER_FPS:-16} PI_BANNER_SIZE=${PI_BANNER_SIZE:-44x22} PI_BANNER_GIF=${PI_BANNER_GIF:-<auto: bundled assets/banner.gif>}"
 echo "  start: pi -e ."
 echo
 
