@@ -102,6 +102,20 @@ class Reader {
 		return clamped;
 	}
 
+	/** `"auto"` or a number clamped to `range`; anything else falls back. */
+	rate(key: string, range: { min: number; max: number }, fallback: number | "auto"): number | "auto" {
+		const raw = this.raw[key];
+		if (raw === undefined) return fallback;
+		if (raw === "auto") return "auto";
+		if (typeof raw !== "number" || !Number.isFinite(raw)) {
+			this.warn(key, `expected "auto" or a number between ${range.min} and ${range.max}, got ${show(raw)}`);
+			return fallback;
+		}
+		const clamped = clamp(raw, range.min, range.max);
+		if (clamped !== Math.round(raw)) this.warn(key, `clamped to ${clamped}`);
+		return clamped;
+	}
+
 	bool(key: string, fallback: boolean): boolean {
 		const raw = this.raw[key];
 		if (raw === undefined) return fallback;
@@ -190,7 +204,7 @@ export function validateSettings(raw: unknown): ValidatedSettings {
 			path: image.text("path"),
 			width: image.number("width", LIMITS.width, imageDefaults.width),
 			height: image.autoSize("height", LIMITS.height, imageDefaults.height),
-			fps: image.number("fps", LIMITS.fps, imageDefaults.fps),
+			fps: image.rate("fps", LIMITS.fps, imageDefaults.fps),
 			stride: image.number("stride", LIMITS.stride, imageDefaults.stride),
 			renderer: image.oneOf("renderer", RENDERERS, imageDefaults.renderer as BannerRenderer),
 			native: {

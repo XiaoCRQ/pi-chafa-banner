@@ -52,6 +52,7 @@ function frames(count = 3): FrameSet {
 		gifPath: "/tmp/preview.gif",
 		totalFrames: count,
 		stride: 1,
+		delays: Array.from({ length: count }, () => 100),
 		fromCache: true,
 		builtAt: Date.now(),
 	};

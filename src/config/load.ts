@@ -217,7 +217,7 @@ export function describeConfig(config: BannerConfig): string {
 		`gif=${config.gifPath ?? "(none)"}`,
 		`image=${formatSize(config.size)}${config.heightAuto ? " (height auto)" : ""}`,
 		`layout=${config.layout.width}`,
-		`fps=${config.fps}`,
+		`fps=${config.fps === "auto" ? "native" : config.fps}`,
 		`stride=${config.stride}`,
 		`renderer=${config.renderer}`,
 		`static=${config.static}`,

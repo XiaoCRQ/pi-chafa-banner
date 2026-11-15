@@ -43,6 +43,7 @@ src/
   pipeline/
     process.ts             spawn-without-tty, preflight, gif fingerprint
     cache.ts               cache root, atomic JSON write, single-file delete
+    timing.ts              per-frame delays from the gif (ffprobe), sampling/thinning
   frames.ts                char pipeline: gif → ffmpeg → chafa → cached ANSI frames
   images.ts                image pipeline: gif → ffmpeg → pal8 PNG → base64 frames
   kitty.ts                 kitty protocol: encode, re-target, delete
@@ -56,6 +57,15 @@ Two pipelines, one shape: `loadFrames()` and `loadImageFrames()` both return a
 pre-rendered set plus provenance (`fromCache`, `builtAt`), and both are safe to
 call from an event handler — they never throw into pi, they reject with
 `FrameError` and the caller degrades to a placeholder card.
+
+Both also carry the gif's own timing. A gif has no frame rate: every frame
+carries a delay, so `pipeline/timing.ts` reads those delays with ffprobe
+(`probeGifTiming`), folds the frames that `stride`/`maxFrames` dropped back into
+the ones that survived (`aggregateDelays`, `thinDelays`) and the result becomes
+`FrameSet.delays` (character mode: one `setTimeout` per frame) or
+`ImageFrameSet.gapsMs` (kitty `anim` mode: one `z=` per `a=f`, so the terminal
+loops at the gif's real speed with zero steady-state traffic). `image.fps` is an
+explicit override for people who want a fixed rate; `"auto"` is the default.
 
 ## 3. Data flow
 
@@ -125,10 +135,12 @@ render(width)
     placements when the viewport changes, and pi's alt-screen path replaces our
     `a=T` with a payload-less `a=p` as soon as it believes the id is already
     uploaded (`tui-alt-screen.js prepareKittyScreen` + `terminal-image.js:353`).
-14. **Teardown deletes the image.** `dispose()`, `/splash off` and image rebuilds
-    emit `a=d,d=I,i=<id>,q=2` (`encodeKittyDelete()`), synchronously when the
-    process may exit, otherwise on a `setTimeout(…, 0)`. Never `d=A` or `d=a` —
-    those would clear other extensions' images.
+    A replaced id is *retired*, not deleted: pi may still re-place it, and a
+    placement for freed data is a band that never comes back (`MAX_RETIRED_IDS`).
+14. **Teardown deletes every image we ever sent.** `dispose()` and `/splash off`
+    emit one `a=d,d=I,i=<id>,q=2` (`encodeKittyDelete()`) per owned or retired id,
+    synchronously when the process may exit, otherwise on a `setTimeout(…, 0)`.
+    Never `d=A` or `d=a` — those would clear other extensions' images.
 
 ## 5. Configuration
 

@@ -22,6 +22,7 @@ import { dirname, join } from "node:path";
 import { formatSize, type BannerConfig, type BannerSize } from "./config.ts";
 import { cacheFilePath, cacheRoot, deleteCacheFile, readCacheJson, writeCacheJson } from "./pipeline/cache.ts";
 import { FrameError, gifHash, missingToolsFor, preflight, run } from "./pipeline/process.ts";
+import { aggregateDelays, probeGifTiming, sampledIndices } from "./pipeline/timing.ts";
 import { padVisible, truncateToWidth, visibleWidth } from "./text.ts";
 
 // Re-exported so callers keep one import for "the char pipeline".
@@ -37,11 +38,13 @@ export interface FrameSet {
 	gifPath: string;
 	totalFrames: number;
 	stride: number;
+	/** How long each *stored* frame stays on screen, in milliseconds. */
+	delays: number[];
 	fromCache: boolean;
 	builtAt: number;
 }
 
-export const CACHE_VERSION = 1;
+export const CACHE_VERSION = 2;
 export const MAX_GIF_FRAMES = 240;
 
 export function normalizeColorMode(mode: string): "truecolor" | "256color" | "ansi" | "none" {
@@ -85,6 +88,8 @@ interface CachePayload {
 	gifPath: string;
 	totalFrames: number;
 	stride: number;
+	/** Per-frame display time in ms; missing in caches written before v2. */
+	delays?: number[];
 	builtAt: number;
 	frames: string[][];
 }
@@ -99,7 +104,8 @@ function isFrameSetLike(value: unknown): value is CachePayload {
 		typeof v.colorMode === "string" &&
 		Array.isArray(v.frames) &&
 		v.frames.length > 0 &&
-		v.frames.every((frame) => Array.isArray(frame) && frame.every((line) => typeof line === "string"))
+		v.frames.every((frame) => Array.isArray(frame) && frame.every((line) => typeof line === "string")) &&
+		(v.delays === undefined || (Array.isArray(v.delays) && v.delays.every((value) => typeof value === "number")))
 	);
 }
 
@@ -207,6 +213,7 @@ export async function loadFrames(
 				gifPath,
 				totalFrames: cached.totalFrames,
 				stride: cached.stride,
+				delays: cached.delays ?? cached.frames.map(() => 100),
 				fromCache: true,
 				builtAt: cached.builtAt,
 			};
@@ -233,11 +240,17 @@ export async function loadFrames(
 		}
 
 		const stride = Math.max(1, config.stride);
-		const picked: string[] = [];
-		for (let index = 0; index < files.length; index += stride) picked.push(files[index]!);
-
+		// Timing first: every sampled frame inherits the delays of the frames it
+		// replaced, so one loop keeps the gif's real length at any stride.
+		const timing = await probeGifTiming(gifPath);
+		const sampled = sampledIndices(files.length, stride);
+		const sampledDelays = aggregateDelays(timing.delays, sampled);
 		const frames: string[][] = [];
-		for (const file of picked) {
+		const delays: number[] = [];
+		let carried = 0;
+		for (let slot = 0; slot < sampled.length; slot++) {
+			const file = files[sampled[slot] as number];
+			if (!file) continue;
 			const { stdout } = await run(
 				"chafa",
 				[
@@ -257,10 +270,20 @@ export async function loadFrames(
 				timeoutMs,
 			);
 			const frame = sanitizeFrame(stdout, size.width, size.height);
-			if (frame.some((line) => visibleWidth(line) > 0)) frames.push(frame);
+			if (!frame.some((line) => visibleWidth(line) > 0)) {
+				// Blank frame: fold its screen time into the next visible one.
+				carried += sampledDelays[slot] ?? 100;
+				continue;
+			}
+			frames.push(frame);
+			delays.push((sampledDelays[slot] ?? 100) + carried);
+			carried = 0;
 		}
 		if (frames.length === 0) {
 			throw new FrameError("chafa", "chafa produced no renderable frames");
+		}
+		if (carried > 0 && delays.length > 0) {
+			delays[delays.length - 1] = (delays[delays.length - 1] ?? 100) + carried;
 		}
 
 		const builtAt = Date.now();
@@ -272,6 +295,7 @@ export async function loadFrames(
 			gifPath,
 			totalFrames: files.length,
 			stride,
+			delays,
 			builtAt,
 			frames,
 		};
@@ -285,6 +309,7 @@ export async function loadFrames(
 			gifPath,
 			totalFrames: files.length,
 			stride,
+			delays,
 			fromCache: false,
 			builtAt,
 		};

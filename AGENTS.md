@@ -88,26 +88,35 @@ src/{config,layout,text,banner}.ts   一层 barrel，保持旧导入路径不变
     一变就 `fallbackImageId()` + `reassignKittyImageId()` 并清行缓存。原因：kitty 在视口变化时
     丢/挪 placement，而 pi 的 fullscreen 路径一旦认为 id 已上传就用 `a=p`（无 payload）替换我们的
     `a=T`（`tui-alt-screen.js prepareKittyScreen` + `terminal-image.js:353`）。
-14. **拆卸必须释放图片**：`dispose()`/`/splash off`/重建换 id 都发
+    换下来的旧 id **不要立刻删**：pi 的缓存仍可能对旧行发 `a=p`，数据被删就只剩空白且永不修复。
+    旧 id 进 `retiredIds`，只淘汰第 4 个之前的老 id（`MAX_RETIRED_IDS = 3`）。
+14. **拆卸必须释放图片**：`dispose()`/`/splash off` 遍历 `ownedIds` + `retiredIds` 逐个发
     `a=d,d=I,i=<id>,q=2`（`encodeKittyDelete()`），**禁止 `d=A`/`d=a`**。dispose 同步写，
-    其余 `setTimeout(…,0)`；宿主没有 `terminal.write` 时必须静默降级。
+    运行期淘汰 `setTimeout(…,0)`；宿主没有 `terminal.write` 时必须静默降级。
 
 ## 4. 两条管线
+
+两条管线共用同一套时长计算（`pipeline/timing.ts`）：gif 没有全局帧率，每帧自带 delay，
+所以 `probeGifTiming()`（ffprobe 取 pts + 容器时长）→ `aggregateDelays()`（stride 丢掉的帧，
+把时长并给保留下来的那一帧，一圈总时长不变）→ `thinDelays()`（再被 maxFrames / 内存上限抽稀时
+保持同样的映射）。**任何一次抽帧都必须同步抽 `delays`/`gapsMs`，否则画面会按 stride 倍速播放**。
 
 字符画：
 
 ```
 gif → sha1(path+mtime+size) → ffmpeg 抽帧（≤240）→ chafa（-c full|256 -s WxH）
     → stripChafaControl + sanitizeFrame → <cache>/<hash>/frames-<WxH>-<mode>.json
+    （payload 里带 delays[]，供 component 的 setTimeout 链逐帧定时）
 ```
 
 原生图片：
 
 ```
 gif → preflight（只要 ffmpeg）→ 单遍抽取+scale+palettegen/paletteuse → pal8 PNG
-    → stride 取样 → decimate(≤maxFrames) → base64
+    → stride 取样 → decimate(≤maxFrames) → base64 + gapsMs[]
     → <cache>/<hash>/images-b<cols>x<rows>-c<cellW>x<cellH>-p<palette>-s<stride>.json
     → allocateImageId() + renderImage(root, {imageId, moveCursor:false})
+    → anim 模式：每个 `a=f` 用自己的 `z=<gap>`，终端按 gif 原速自播（稳态 0 B/s）
 ```
 
 - 改 JSON 结构就要给 `CACHE_VERSION` / `IMAGE_CACHE_VERSION` +1。
@@ -119,8 +128,8 @@ gif → preflight（只要 ffmpeg）→ 单遍抽取+scale+palettegen/paletteuse
 ## 5. 配置（`pi-chafa-banner.json`）
 
 放在**扩展所在目录**（全局安装 `~/.pi/agent/`，项目内 `<project>/.pi/`）。读取顺序：只读这一
-个文件，缺失键用默认值，非法值丢弃并记警告。关键键：`image.{path,width,height,fit,fps,stride,
-renderer,native.*}`、`layout.{width,gap,twoColumnMinWidth,compactMinWidth,maxWidth,lowerRows}`、
+个文件，缺失键用默认值，非法值丢弃并记警告。关键键：`image.{path,width,height,fps,stride,
+renderer,native.*}`（`fps` 默认 `"auto"` = 按 gif 每帧自己的 delay；写数字才会覆盖成固定帧率）、`layout.{width,gap,twoColumnMinWidth,compactMinWidth,maxWidth,lowerRows}`、
 `panels.{info,resources}`、`behavior.{enabled,static,hidePiResourceList}`。完整表见 README，
 schema 见 `pi-chafa-banner.schema.json`。
 
@@ -146,7 +155,9 @@ schema 见 `pi-chafa-banner.schema.json`。
   `config/schema.ts` 的 `RESOURCE_SECTIONS` + `banner/panels.ts sections()`。
 - **加配置项**：`schema.ts`（类型+默认+limits）→ `validate.ts`（读取+警告）→
   `pi-chafa-banner.schema.json` → `test/config.test.ts`。
-- **改动画节奏**：`banner/component.ts start()` 与 `frames.ts` 的 stride；保持 `unref()`。
+- **改动画节奏**：`pipeline/timing.ts`（`probeGifTiming`/`aggregateDelays`/`thinDelays`）决定每帧时长，
+  `banner/component.ts frameDelay()+scheduleTick()` 按帧自调度；`image.fps` 是覆盖用的固定速率。
+  保持 `unref()` 与暂停/恢复逻辑。
 
 ## 8. 已知问题 / 盲区
 
@@ -160,8 +171,9 @@ schema 见 `pi-chafa-banner.schema.json`。
    `behavior.static` 或 `animSeconds`。
 4. **`types/pi-host.d.ts` / `types/pi-tui.d.ts` 是手写 shim**，会滞后于真实 API；改用法时对照
    `pi` 包的 `dist/**/*.d.ts`。`TerminalLike.write` 是可选方法。
-5. **动画开销**：字符画约 21KB/帧 × fps；图片 `anim` 稳态 0 B/s，`frames` 约 1.3MB/s。
-   长会话、全屏模式、慢终端建议降 fps/stride 或 `behavior.static: true`。
+5. **动画开销**：字符画约 21KB/帧 × 每秒帧数；图片 `anim` 稳态 0 B/s，`frames` 约 1.3MB/s。
+   长会话、全屏模式、慢终端建议加大 stride（`image.stride`）或 `behavior.static: true`。
+   注意**不要**用 `image.fps` 降速：它会覆盖 gif 自带时长，配合 stride 会让画面比原速快/慢。
 
 ## 9. 外部参考
 

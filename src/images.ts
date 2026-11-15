@@ -17,6 +17,7 @@ import { paletteOf, type BannerConfig } from "./config.ts";
 import { cacheFilePath, cacheRoot, deleteCacheFile, readCacheJson, writeCacheJson } from "./pipeline/cache.ts";
 import { FrameError, gifHash, missingToolsFor, preflight, run } from "./pipeline/process.ts";
 import { extractFrames } from "./frames.ts";
+import { aggregateDelays, probeGifTiming, sampledIndices, thinDelays } from "./pipeline/timing.ts";
 import {
 	allocateImageId,
 	calculateImageCells,
@@ -47,8 +48,10 @@ export interface ImageFrameSet {
 	imageId: number;
 	/** Root frame transmission (`a=T`, with `c=`/`r=`/`i=`/`C=1`). */
 	sequence: string;
-	/** Frame gap in milliseconds, clamped to 40..200. */
+	/** Average frame gap in milliseconds (kept for display / fallbacks). */
 	gapMs: number;
+	/** Per-frame delay in milliseconds; drives the kitty `z=` values. */
+	gapsMs: number[];
 	gifPath: string;
 	totalFrames: number;
 	stride: number;
@@ -58,14 +61,12 @@ export interface ImageFrameSet {
 }
 
 /** Bump whenever the JSON shape below changes; independent of `CACHE_VERSION`. */
-export const IMAGE_CACHE_VERSION = 1;
+export const IMAGE_CACHE_VERSION = 2;
 
 /** Hard ceiling on the in-memory base64 payload (all frames combined). */
 const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
 const MAX_IMAGE_TIMEOUT_MS = 20_000;
 const MAX_FRAMES_HARD_CAP = 240;
-const LOOP_GAP_MIN = 40;
-const LOOP_GAP_MAX = 200;
 
 interface ImageCachePayload {
 	version: number;
@@ -79,6 +80,8 @@ interface ImageCachePayload {
 	totalFrames: number;
 	stride: number;
 	gapMs: number;
+	/** Per-frame delays; absent in caches written before v2. */
+	gapsMs?: number[];
 	builtAt: number;
 	frames: string[];
 }
@@ -196,6 +199,21 @@ export function decimate<T>(items: readonly T[], max: number): T[] {
 	return out;
 }
 
+/**
+ * Human summary of the animation timing, e.g. `300ms ×8 = 2.40s (3.3fps)`.
+ * Shown by `/splash status` and `preview`, so a "why is it fast" report can be
+ * answered from the tool output alone.
+ */
+export function describeGap(images: ImageFrameSet): string {
+	const gaps = images.gapsMs.length > 0 ? images.gapsMs : [images.gapMs];
+	const first = gaps[0] ?? images.gapMs;
+	const total = gaps.reduce((sum, value) => sum + value, 0);
+	const uniform = gaps.every((value) => Math.abs(value - first) < 1);
+	const fps = total > 0 ? gaps.length / (total / 1000) : 0;
+	const each = uniform ? `${first}ms` : `${Math.round(total / gaps.length)}ms avg`;
+	return `${each} ×${gaps.length} = ${(total / 1000).toFixed(2)}s (${fps.toFixed(1)}fps)`;
+}
+
 export async function readPngBase64(paths: readonly string[]): Promise<ImageFrame[]> {
 	const frames: ImageFrame[] = [];
 	for (const path of paths) {
@@ -295,7 +313,9 @@ function isImageCachePayload(value: unknown): value is ImageCachePayload {
 		v.rows > 0 &&
 		Array.isArray(v.frames) &&
 		v.frames.length > 0 &&
-		v.frames.every((frame) => typeof frame === "string" && frame.length > 0)
+		v.frames.every((frame) => typeof frame === "string" && frame.length > 0) &&
+		(v.gapsMs === undefined ||
+			(Array.isArray(v.gapsMs) && v.gapsMs.every((value) => typeof value === "number" && value > 0)))
 	);
 }
 
@@ -333,7 +353,10 @@ export async function loadImageFrames(config: BannerConfig, options: ImageLoadOp
 		maxColumns: Math.max(1, options.maxColumns ?? config.size.width),
 		maxRows: Math.max(1, options.maxRows ?? config.size.height),
 	};
-	const gapMs = Math.min(LOOP_GAP_MAX, Math.max(LOOP_GAP_MIN, Math.round(1000 / Math.max(1, config.fps))));
+	// Timing comes from the gif itself: with `stride > 1` every kept frame has to
+	// stand in for the ones we dropped, or the loop plays `stride` times too fast.
+	const timing = await probeGifTiming(gifPath);
+	const gapMs = Math.max(1, Math.round(timing.totalMs / Math.max(1, timing.delays.length)));
 	const hash = await gifHash(gifPath);
 	const cachePath = imageCachePath(hash, budget, cell, palette, stride);
 	const timeoutMs = options.timeoutMs ?? MAX_IMAGE_TIMEOUT_MS;
@@ -356,16 +379,17 @@ export async function loadImageFrames(config: BannerConfig, options: ImageLoadOp
 			let files = await encodeImagePngs(gifPath, workDir, grid, palette, timeoutMs);
 			const totalFrames = files.length;
 
-			const picked = decimate(
-				files.filter((_, index) => index % stride === 0),
-				Math.max(1, config.maxFrames),
-			);
+			const sampled = sampledIndices(totalFrames, stride);
+			const sampledFiles = sampled.map((index) => files[index]!).filter((path) => path !== undefined);
+			const picked = decimate(sampledFiles, Math.max(1, config.maxFrames));
+			let gaps = thinDelays(aggregateDelays(timing.delays, sampled), picked.length);
 			let frames = await readPngBase64(picked);
 
 			// Memory ceiling: thin frames first, then shrink the grid once, then
 			// settle for a still image.
 			if (payloadBytes(frames) > MAX_IMAGE_BYTES) {
 				const keep = Math.max(1, Math.floor((frames.length * MAX_IMAGE_BYTES) / payloadBytes(frames)));
+				gaps = thinDelays(gaps, Math.min(keep, frames.length));
 				frames = decimate(frames, keep);
 			}
 			if (payloadBytes(frames) > MAX_IMAGE_BYTES) {
@@ -387,6 +411,7 @@ export async function loadImageFrames(config: BannerConfig, options: ImageLoadOp
 					const retryFrames = await readPngBase64(retryPicked);
 					if (retryFrames.length > 0 && payloadBytes(retryFrames) < payloadBytes(frames)) {
 						grid = shrunk;
+						gaps = thinDelays(gaps, retryFrames.length);
 						frames = retryFrames;
 					}
 				} catch {
@@ -395,7 +420,10 @@ export async function loadImageFrames(config: BannerConfig, options: ImageLoadOp
 					await rm(retryDir, { recursive: true, force: true }).catch(() => undefined);
 				}
 			}
-			if (payloadBytes(frames) > MAX_IMAGE_BYTES) frames = [frames[0] as ImageFrame];
+			if (payloadBytes(frames) > MAX_IMAGE_BYTES) {
+				gaps = [gaps.reduce((acc, value) => acc + value, 0)];
+				frames = [frames[0] as ImageFrame];
+			}
 
 			payload = {
 				version: IMAGE_CACHE_VERSION,
@@ -409,6 +437,7 @@ export async function loadImageFrames(config: BannerConfig, options: ImageLoadOp
 				totalFrames,
 				stride,
 				gapMs,
+				gapsMs: gaps,
 				builtAt: Date.now(),
 				frames: frames.map((frame) => frame.base64),
 			};
@@ -442,6 +471,7 @@ export async function loadImageFrames(config: BannerConfig, options: ImageLoadOp
 		imageId,
 		sequence: root.sequence,
 		gapMs: payload.gapMs,
+		gapsMs: payload.gapsMs ?? payload.frames.map(() => payload.gapMs),
 		gifPath: payload.gifPath,
 		totalFrames: payload.totalFrames,
 		stride: payload.stride,

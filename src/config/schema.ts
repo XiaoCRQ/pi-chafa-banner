@@ -34,13 +34,16 @@ export type ResourceSectionId = "context" | "skills" | "themes" | "extensions";
 
 export type AutoSize = number | "auto";
 
+/** `"auto"` = the gif's own timing, a number = fixed frames per second. */
+export type RateSetting = number | "auto";
+
 export interface ImageSettings {
 	path: string | undefined;
 	/** Character columns for the picture band. */
 	width: number;
 	/** Character rows, or `auto` = derive from the source aspect ratio. */
 	height: AutoSize;
-	fps: number;
+	fps: RateSetting;
 	stride: number;
 	renderer: BannerRenderer;
 	native: {
@@ -96,7 +99,7 @@ export interface BannerConfig {
 	size: BannerSize;
 	/** `true` when `size.height` came from `image.height: "auto"`. */
 	heightAuto: boolean;
-	fps: number;
+	fps: RateSetting;
 	stride: number;
 	renderer: BannerRenderer;
 	static: boolean;
@@ -128,7 +131,7 @@ export const DEFAULT_FILE = {
 		path: "~/Pictures/logo/v-3.gif",
 		width: 44,
 		height: "auto",
-		fps: 16,
+		fps: "auto",
 		stride: 3,
 		renderer: "auto",
 		native: { mode: "anim", palette: 128, maxPixels: 640_000, maxFrames: 24, animSeconds: 0 },

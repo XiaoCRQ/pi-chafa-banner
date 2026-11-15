@@ -10,7 +10,7 @@ import type { Banner } from "../banner.ts";
 import type { BannerConfig } from "../config.ts";
 import { FrameError, type FrameSet } from "../frames.ts";
 import type { DetachedListing } from "../host.ts";
-import type { ImageFrameSet } from "../images.ts";
+import { describeGap, type ImageFrameSet } from "../images.ts";
 import { imageBandBudget, type ImageBandBudget } from "../layout.ts";
 import { formatSize } from "../config.ts";
 import type { BannerResources } from "../resources.ts";
@@ -112,7 +112,7 @@ export function describeImage(current: SessionState): string {
 	return [
 		`kitty ${images.columns}x${images.rows}c`,
 		`${images.frames.length}/${images.totalFrames}f`,
-		`gap ${images.gapMs}ms`,
+		`gap ${describeGap(images)}`,
 		mode,
 		`id=${images.imageId}`,
 		images.fromCache ? "cache" : "build",

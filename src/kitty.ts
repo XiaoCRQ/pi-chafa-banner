@@ -297,6 +297,8 @@ export interface KittyFrameSource {
 	frames: { base64: string }[];
 	imageId: number;
 	gapMs: number;
+	/** Per-frame delays in ms; falls back to `gapMs` when absent. */
+	gapsMs?: number[];
 }
 
 /**
@@ -312,14 +314,17 @@ export function buildKittyLine(options: {
 	animate: boolean;
 	loopForever: boolean;
 }): string {
-	const { sequence, frames, imageId, gapMs } = options.images;
+	const { sequence, frames, imageId, gapMs, gapsMs } = options.images;
 	if (!options.animate || frames.length < 2) return sequence;
+	// Each frame carries its own delay: a gif does not have a frame rate, and
+	// playing every frame for the same time is what made the band run fast.
+	const gapAt = (index: number): number => gapsMs?.[index] ?? gapMs;
 	let out = sequence;
-	out += encodeKittyRootGap(imageId, gapMs);
+	out += encodeKittyRootGap(imageId, gapAt(0));
 	for (let index = 1; index < frames.length; index++) {
 		const frame = frames[index];
 		if (!frame) continue;
-		out += encodeKittyAnimFrame(frame.base64, imageId, gapMs);
+		out += encodeKittyAnimFrame(frame.base64, imageId, gapAt(index));
 	}
 	out += encodeKittyStart(imageId, options.loopForever);
 	return out;

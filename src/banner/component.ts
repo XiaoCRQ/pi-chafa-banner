@@ -13,6 +13,7 @@
 import type { Component, Theme, TUI } from "@earendil-works/pi-coding-agent";
 import { formatSize, type BannerConfig, type PanelField, type ResourceSectionId } from "../config.ts";
 import type { FrameSet } from "../frames.ts";
+import { DEFAULT_FRAME_DELAY_MS } from "../pipeline/timing.ts";
 import type { ImageFrameSet } from "../images.ts";
 import { buildImageLine, clearImageLineCache } from "./band.ts";
 import {
@@ -50,6 +51,15 @@ const MIN_BOX_ROWS = 5;
 /** Lines the image-mode "no picture yet" card occupies (never height-dependent). */
 const IMAGE_PLACEHOLDER_ROWS = 5;
 
+/**
+ * How many replaced image ids stay alive after a retransmission.
+ *
+ * Each one is a decoded frame buffer in the terminal (a few MB), so this is a
+ * memory/robustness trade-off: enough to cover a resize burst while pi's cache
+ * still points at them, few enough not to accumulate over a long session.
+ */
+const MAX_RETIRED_IDS = 3;
+
 export interface BannerInit {
 	config: BannerConfig;
 	resources: BannerResources;
@@ -61,6 +71,9 @@ export interface BannerInit {
 }
 
 export class Banner implements Component {
+	/** Floor between two frames: below this the redraw churn is not worth it. */
+	private static readonly MIN_FRAME_MS = 20;
+
 	private readonly painter: Painter;
 	private config: BannerConfig;
 	private resources: BannerResources;
@@ -71,9 +84,13 @@ export class Banner implements Component {
 	private frameIndex = 0;
 	/** Last `${columns}x${rows}` seen by `render()`; a change forces a re-upload. */
 	private shapeKey = "";
+	/** Every id this banner ever transmitted, so teardown can free them all. */
+	private ownedIds = new Set<number>();
+	/** Ids replaced by a retransmission; pi may still re-place them via `a=p`. */
+	private retiredIds: number[] = [];
 	/** Image ids to delete once the current frame has been written. */
 	private pendingDeletes: number[] = [];
-	private timer: ReturnType<typeof setInterval> | undefined;
+	private timer: ReturnType<typeof setTimeout> | undefined;
 	/** `PI_BANNER_ANIM_SECONDS`: stop the animation after a while. */
 	private freezeTimer: ReturnType<typeof setTimeout> | undefined;
 	private visible: boolean;
@@ -117,9 +134,12 @@ export class Banner implements Component {
 		const previous = this.images;
 		this.images = images;
 		this.resetImageCaches();
-		// A rebuild allocates a new id; free the old picture so kitty does not keep
-		// a stranded copy (and a stranded animation) alive.
-		if (previous && previous.imageId !== images?.imageId) this.releaseImageId(previous.imageId);
+		// A rebuild allocates a new id. Keep the old picture alive for a while
+		// instead of deleting it: pi caches uploaded ids and would substitute a
+		// payload-less `a=p` for a line whose image we just freed — a picture that
+		// disappears and is never repaired.
+		if (previous && previous.imageId !== images?.imageId) this.retireImageId(previous.imageId);
+		if (images) this.ownedIds.add(images.imageId);
 		const count = images?.frames.length ?? 0;
 		if (count === 0) this.frameIndex = 0;
 		else this.frameIndex %= count;
@@ -171,8 +191,9 @@ export class Banner implements Component {
 		if (!images) return;
 		const imageId = fallbackImageId();
 		this.images = { ...images, imageId, sequence: reassignKittyImageId(images.sequence, imageId) };
+		this.ownedIds.add(imageId);
 		this.resetImageCaches();
-		this.releaseImageId(images.imageId);
+		this.retireImageId(images.imageId);
 		this.preloadImageLines();
 	}
 
@@ -190,6 +211,30 @@ export class Banner implements Component {
 
 	/**
 	 * Free one image id (`a=d,d=I`). Deferred to the next tick by default so the
+	 * bytes never interleave with a frame pi is still composing; `now` is used on
+	 * the dispose path, where the process may exit before a timer fires.
+	 */
+	/**
+	 * Retire an id that is no longer on screen, without deleting it right away.
+	 *
+	 * pi keeps a per-session cache of ids it uploaded; while an id is cached it
+	 * rewrites our root frame as `a=p` (placement only, no payload). Deleting the
+	 * data first turns that rewrite into a blank band pi will never repair, since
+	 * from its side the image is still uploaded. The newest few retired ids stay
+	 * alive; only older ones are freed, and teardown frees everything.
+	 */
+	private retireImageId(imageId: number): void {
+		if (this.renderer !== "kitty") return;
+		if (imageId === this.images?.imageId) return;
+		this.ownedIds.add(imageId);
+		this.retiredIds.push(imageId);
+		while (this.retiredIds.length > MAX_RETIRED_IDS) {
+			const oldest = this.retiredIds.shift();
+			if (oldest !== undefined) this.releaseImageId(oldest);
+		}
+	}
+
+	/** Free one image id (`a=d,d=I`). Deferred to the next tick by default so the
 	 * bytes never interleave with a frame pi is still composing; `now` is used on
 	 * the dispose path, where the process may exit before a timer fires.
 	 */
@@ -214,9 +259,11 @@ export class Banner implements Component {
 	 * process exit, leaving a picture that keeps animating behind the prompt.
 	 */
 	releaseImage(): void {
-		const images = this.images;
-		if (!images) return;
-		this.releaseImageId(images.imageId, true);
+		const ids = new Set<number>(this.ownedIds);
+		if (this.images) ids.add(this.images.imageId);
+		for (const id of ids) this.releaseImageId(id, true);
+		this.ownedIds.clear();
+		this.retiredIds = [];
 	}
 
 	setResources(resources: BannerResources): void {
@@ -292,22 +339,48 @@ export class Banner implements Component {
 		if (this.frozen || this.config.static) return;
 		this.scheduleAutoFreeze();
 		if (this.frameCount() < 2) return;
-		const intervalMs = Math.max(33, Math.round(1000 / Math.max(1, this.config.fps)));
-		this.timer = setInterval(() => {
+		this.scheduleTick();
+	}
+
+	/**
+	 * Delay for the frame currently on screen.
+	 *
+	 * A gif has no frame rate: every frame carries its own delay, and sampling
+	 * every Nth frame (`stride`) means each kept frame has to stay up N times
+	 * longer — that is what `delays`/`gapsMs` already encode. `image.fps` is an
+	 * explicit override for people who want a fixed rate regardless of the gif.
+	 */
+	private frameDelay(): number {
+		const fps = this.config.fps;
+		if (typeof fps === "number" && fps > 0) return Math.max(Banner.MIN_FRAME_MS, Math.round(1000 / fps));
+		const delays = this.renderer === "kitty" ? this.images?.gapsMs : this.frames?.delays;
+		const delay = delays?.[this.frameIndex];
+		return Math.max(Banner.MIN_FRAME_MS, Math.round(delay ?? DEFAULT_FRAME_DELAY_MS));
+	}
+
+	/**
+	 * Self-rescheduling tick: `setInterval` cannot honour per-frame delays, and a
+	 * `setTimeout` chain keeps the loop honest without drifting (each tick is
+	 * scheduled after the render request, so slow frames never pile up).
+	 */
+	private scheduleTick(): void {
+		this.timer = setTimeout(() => {
+			this.timer = undefined;
 			if (this.disposed || this.paused || this.frozen || !this.visible) return;
 			const total = this.frameCount();
 			if (total < 2) return;
 			this.frameIndex = (this.frameIndex + 1) % total;
 			this.invalidate();
 			this.tui.requestRender();
-		}, intervalMs);
+			this.scheduleTick();
+		}, this.frameDelay());
 		// Never keep the process alive just to animate a splash.
 		this.timer.unref?.();
 	}
 
 	stopTimer(): void {
 		if (this.timer !== undefined) {
-			clearInterval(this.timer);
+			clearTimeout(this.timer);
 			this.timer = undefined;
 		}
 		if (this.freezeTimer !== undefined) {

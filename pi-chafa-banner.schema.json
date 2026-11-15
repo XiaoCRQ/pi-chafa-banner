@@ -44,11 +44,18 @@
           "default": "auto"
         },
         "fps": {
-          "description": "Animation frames per second.",
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 30,
-          "default": 16
+          "description": "\"auto\" plays the gif at its own per-frame delays (recommended). A number forces a fixed rate, which makes a stride-sampled gif look accelerated.",
+          "oneOf": [
+            {
+              "const": "auto"
+            },
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 30
+            }
+          ],
+          "default": "auto"
         },
         "stride": {
           "description": "Keep every Nth gif frame; higher is smaller and faster.",

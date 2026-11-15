@@ -5,7 +5,7 @@
     "path": "~/Pictures/logo/v-3.gif",
     "width": 44,
     "height": "auto",
-    "fps": 16,
+    "fps": "auto",
     "stride": 3,
     "renderer": "auto",
     "native": {

@@ -44,8 +44,8 @@ const PAYLOAD = "A".repeat(400);
 
 function imageSet(overrides: Partial<ImageFrameSet> = {}): ImageFrameSet {
 	const columns = overrides.columns ?? 44;
-	// 44x20 stands in for a picture the pipeline built for an older/other size;
-	// short terminals crop whatever the cache holds (layout.ts planImageBand).
+	// 44x20 stands in for a picture built for a size the window no longer has:
+	// the band is still emitted whole, the panels below it are what yields.
 	const rows = overrides.rows ?? 20;
 	const count = overrides.frames?.length ?? 3;
 	return {
@@ -58,6 +58,7 @@ function imageSet(overrides: Partial<ImageFrameSet> = {}): ImageFrameSet {
 		imageId: 4242,
 		sequence: `\x1b_Ga=T,f=100,q=2,C=1,c=${columns},r=${rows},i=4242;${PAYLOAD}\x1b\\`,
 		gapMs: 63,
+		gapsMs: Array.from({ length: count }, () => 63),
 		gifPath: "/tmp/x.gif",
 		totalFrames: 57,
 		stride: 3,
@@ -380,13 +381,16 @@ describe("banner: terminal lifecycle", () => {
 		expect(sink.join("")).toContain("\x1b_Ga=d,d=I,i=4242,q=2\x1b\\");
 	});
 
-	test("dropping the image set frees the old id, deferred past the frame", async () => {
+	test("dropping the image set keeps the id until teardown, then frees it", async () => {
 		const sink: string[] = [];
 		const { component } = harness(40, 100, sink);
 		component.render(100);
 		component.setImages(undefined);
+		// Nothing is freed mid-session: pi may still re-place the id it cached.
 		expect(sink.join("")).toBe("");
 		await new Promise((resolve) => setTimeout(resolve, 5));
+		expect(sink.join("")).toBe("");
+		component.dispose();
 		expect(sink.join("")).toContain("a=d,d=I,i=4242");
 	});
 
@@ -407,8 +411,13 @@ describe("banner: terminal lifecycle", () => {
 		expect(after).toContain("a=T");
 		expect(after).toContain("f=100");
 		expect(after).toContain(`i=${id}`);
+		// The replaced id survives the retransmission: deleting it here would let
+		// pi turn a later re-placement into a blank band.
 		await new Promise((resolve) => setTimeout(resolve, 5));
+		expect(sink.join("")).not.toContain("a=d,d=I,i=4242");
+		component.dispose();
 		expect(sink.join("")).toContain("a=d,d=I,i=4242");
+		expect(sink.join("")).toContain(`a=d,d=I,i=${id}`);
 	});
 
 	test("re-rendering at an unchanged size keeps the transmitted line", () => {

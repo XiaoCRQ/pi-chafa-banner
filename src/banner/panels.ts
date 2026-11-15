@@ -89,5 +89,5 @@ export function charPlaceholder(painter: Painter, status: string | undefined, wi
 
 /** Short, stable description used by `/splash status` and the preview script. */
 export function describeConfig(config: BannerConfig): string {
-	return `size=${formatSize(config.size)} fps=${config.fps} stride=${config.stride} mode=${config.static ? "static" : "anim"}`;
+	return `size=${formatSize(config.size)} fps=${config.fps === "auto" ? "native" : config.fps} stride=${config.stride} mode=${config.static ? "static" : "anim"}`;
 }

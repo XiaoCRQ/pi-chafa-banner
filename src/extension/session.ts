@@ -21,8 +21,22 @@ let cachedPi: ExtensionAPI | undefined;
 
 /** Wait for a resize burst to settle before re-encoding pixels. */
 const IMAGE_REBUILD_DEBOUNCE_MS = 300;
-/** Encoding is expensive; two corrections per session is enough. */
-const MAX_IMAGE_REBUILDS = 2;
+/** Telemetry only: how many times pixels were re-encoded this session. */
+
+/**
+ * Did the terminal shape change enough to warrant re-encoding the pixels?
+ *
+ * Both directions count: a narrower terminal needs a smaller grid to fit, and a
+ * wider one would otherwise keep the small picture forever. The first build
+ * (`undefined`) is not a rebuild — it is still in flight.
+ */
+export function needsImageRebuild(
+	built: { maxColumns: number; maxRows: number } | undefined,
+	budget: { maxColumns: number; maxRows: number },
+): boolean {
+	if (!built) return false;
+	return built.maxColumns !== budget.maxColumns || built.maxRows !== budget.maxRows;
+}
 
 export async function buildContent(ctx: ExtensionContext, current: SessionState, force = false): Promise<void> {
 	if (current.building) return;
@@ -69,6 +83,9 @@ export async function buildContent(ctx: ExtensionContext, current: SessionState,
 		current.banner?.setStatus(current.status);
 		current.banner?.setFrames(undefined);
 		current.banner?.setImages(undefined);
+		// Record the budget we attempted: otherwise every render would schedule the
+		// same failing rebuild again (a 300 ms ffmpeg loop).
+		current.imageBudget = imageBudgetFor(current);
 		if (!current.notified) {
 			current.notified = true;
 			ctx.ui.notify(`pi-chafa-banner: ${current.status}`, "warning");
@@ -165,19 +182,23 @@ export async function refreshResources(ctx: ExtensionContext, current: SessionSt
 
 /**
  * Re-encode the image when the terminal changed shape under a header that was
- * built for a different grid. Debounced and capped: a resize storm must not
- * turn into an ffmpeg loop.
+ * built for a different grid.
+ *
+ * The comparison is against the budget the current pixels were encoded for, not
+ * against "is the picture too big": a terminal that only *grows* leaves the
+ * picture legal but tiny, and the old rule then never rebuilt it — a shrunk
+ * splash stayed shrunk for the rest of the session. Because the budget is a pure
+ * function of the terminal width and the configured size, comparing budgets also
+ * terminates: one rebuild per distinct shape, no cap needed.
  */
 export function scheduleImageRebuild(ctx: ExtensionContext, current: SessionState): void {
 	if (current.renderer !== "kitty" || current.building) return;
 	if (current.rebuildTimer !== undefined) return;
-	if (current.imageRebuilds >= MAX_IMAGE_REBUILDS) return;
-	const images = current.images;
-	if (!images) return;
+	if (!current.images) return;
 	const budget = imageBudgetFor(current);
-	// Width mismatch is fatal (the band would overflow), height mismatch only
-	// wastes rows — both are worth one rebuild.
-	if (images.columns <= budget.maxColumns && images.rows <= budget.maxRows) return;
+	// `undefined` means the very first build is still running; it will pick up
+	// the current width on its own.
+	if (!needsImageRebuild(current.imageBudget, budget)) return;
 	current.imageRebuilds += 1;
 	current.rebuildTimer = setTimeout(() => {
 		current.rebuildTimer = undefined;

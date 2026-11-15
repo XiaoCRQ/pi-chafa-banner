@@ -34,10 +34,12 @@ import {
 	loadConfig,
 	parseSize,
 	type BannerConfig,
+	type RateSetting,
 } from "../src/config.ts";
 import { FrameError, loadFrames, missingToolsFor, preflight, type FrameSet } from "../src/frames.ts";
-import { loadImageFrames, probeSourceSize, type ImageFrameSet } from "../src/images.ts";
+import { describeGap, loadImageFrames, probeSourceSize, type ImageFrameSet } from "../src/images.ts";
 import { imageBandBudget, parseKittyRows } from "../src/layout.ts";
+import { describeTiming } from "../src/pipeline/timing.ts";
 import { isImageLine, visibleWidth } from "../src/text.ts";
 import { collectResources, emptyResources, type BannerResources } from "../src/resources.ts";
 import type { Theme, TUI } from "@earendil-works/pi-coding-agent";
@@ -55,7 +57,7 @@ interface Args {
 	frames: number;
 	/** Whether --frames was given explicitly (caps --anim). */
 	framesGiven: boolean;
-	fps?: number;
+	fps?: RateSetting;
 	/** Render one frame and never animate. */
 	static: boolean;
 	/** Loop in place until Ctrl-C (or --frames iterations). */
@@ -85,7 +87,7 @@ const USAGE = `usage: bun run scripts/preview.ts [flags]
 
   --static            render a single frame, no animation timer (default output)
   --frames N          print N animation frames then exit
-  --fps N             animation rate for --frames/--anim (1-${LIMITS.fps.max})
+  --fps N|auto        animation rate: a fixed fps, or "auto" (default) = gif timing
   --size WxH          chafa canvas size (default ${formatSize(DEFAULTS.size)})
   --width COLS        simulated terminal width (default $COLUMNS or 100)
   --anim              loop frames in place until Ctrl-C
@@ -156,8 +158,13 @@ function parseArgs(argv: string[]): Args {
 				args.framesGiven = true;
 				break;
 			case "--fps": {
-				const raw = Number(argv[++i]);
-				args.fps = clamp(Number.isFinite(raw) ? raw : DEFAULTS.fps, LIMITS.fps.min, LIMITS.fps.max);
+				const raw = argv[++i];
+				if (raw === "auto") {
+					args.fps = "auto";
+					break;
+				}
+				const value = Number(raw);
+				args.fps = clamp(Number.isFinite(value) ? value : 16, LIMITS.fps.min, LIMITS.fps.max);
 				break;
 			}
 			case "--size":
@@ -432,7 +439,7 @@ async function main(): Promise<void> {
 			images = await loadImageFrames(config, { maxColumns, maxRows, payloadStub: !args.realKitty });
 			console.error(
 				`preview: image ${images.columns}x${images.rows}c ${images.pixelWidth}x${images.pixelHeight}px ` +
-					`${images.frames.length}/${images.totalFrames}f gap ${images.gapMs}ms id=${images.imageId} ` +
+					`${images.frames.length}/${images.totalFrames}f ${describeGap(images)} id=${images.imageId} ` +
 					`${images.fromCache ? "(cache)" : "(fresh)"} in ${Date.now() - started}ms`,
 			);
 			if (args.realKitty) {
@@ -486,8 +493,14 @@ async function main(): Promise<void> {
 	const total = args.image ? (images?.frames.length ?? 1) : (frames?.frames.length ?? 0);
 
 	if (args.anim && total > 1) {
-		const fps = args.fps ?? config.fps;
-		const delayMs = Math.max(16, Math.round(1000 / Math.max(1, fps)));
+		// Same rule as the component: an explicit `fps` wins, otherwise each frame
+		// uses the delay it carries (which is the gif's own timing).
+		const fixed = typeof config.fps === "number" ? config.fps : undefined;
+		const delays = args.image ? (images?.gapsMs ?? []) : (frames?.delays ?? []);
+		const delayFor = (index: number): number =>
+			fixed !== undefined
+				? Math.max(20, Math.round(1000 / fixed))
+				: Math.max(20, Math.round(delays[index] ?? 100));
 		const iterations = Number.isFinite(args.frames) ? Math.max(1, args.frames) : Number.POSITIVE_INFINITY;
 		const restore = () => {
 			process.stdout.write("\x1b[?25h\n");
@@ -502,12 +515,18 @@ async function main(): Promise<void> {
 			banner.setFrameIndex(index);
 			process.stdout.write(HOME_CLEAR);
 			printFrame(banner.render(args.width));
+			await Bun.sleep(delayFor(index));
 			index = (index + 1) % total;
-			await Bun.sleep(delayMs);
 		}
 		restore();
 		banner.dispose();
-		console.error(`preview: played ${Number.isFinite(iterations) ? iterations : "∞"} frames at ${fps} fps, width ${args.width}`);
+		const label =
+			fixed !== undefined
+				? `${fixed} fps`
+				: `${describeTiming(delays)} (gif timing)`;
+		console.error(
+			`preview: played ${Number.isFinite(iterations) ? iterations : "∞"} frames at ${label}, width ${args.width}`,
+		);
 		return;
 	}
 
@@ -526,7 +545,7 @@ async function main(): Promise<void> {
 	}
 	console.error(
 		`preview: ${count === 1 ? "1 frame" : `${count} frames`}, width ${args.width}, ` +
-			`${args.static ? "static" : `anim ${args.fps ?? config.fps} fps`}, size ${formatSize(config.size)}` +
+			`${args.static ? "static" : `anim ${typeof config.fps === "number" ? `${config.fps} fps` : "native"}`}, size ${formatSize(config.size)}` +
 			(images
 				? `, image ${images.frames.length}/${images.totalFrames}f at ${images.columns}x${images.rows}c`
 				: frames
