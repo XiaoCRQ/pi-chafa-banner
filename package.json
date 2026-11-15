@@ -1,7 +1,7 @@
 {
 	"name": "pi-chafa-banner",
-	"version": "1.0.1",
-	"description": "Animated chafa splash header for pi: gif art top-left, model info below, skills/themes/extensions on the right, with configurable (tokyonight) colour themes",
+	"version": "1.1.0",
+	"description": "Animated chafa splash header for pi: gif art top-left, a coding-agent card (pi version, model + thinking level) below it, context/skills/extensions on the right, tokyonight colours by default",
 	"type": "module",
 	"private": false,
 	"license": "MIT",
