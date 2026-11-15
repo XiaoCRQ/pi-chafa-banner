@@ -174,6 +174,21 @@ export async function probeGifSize(gifPath: string, workDir: string, timeoutMs =
 }
 
 /**
+ * Aspect ratio of the artwork, for `height: "auto"`.
+ *
+ * Deliberately renderer-agnostic: chafa's canvas and the native cell grid must
+ * agree on the band height, otherwise the two modes produce visibly different
+ * splashes. Cheap (one ffmpeg run, no quantization) and only used when the
+ * config asks for an automatic height.
+ */
+export async function probeSourceSize(gifPath: string, timeoutMs = MAX_IMAGE_TIMEOUT_MS): Promise<{ width: number; height: number }> {
+	const dir = join(cacheRoot(), "probe");
+	await mkdir(dir, { recursive: true });
+	const size = await probeGifSize(gifPath, dir, timeoutMs);
+	return { width: size.widthPx, height: size.heightPx };
+}
+
+/**
  * Evenly thin a list down to `max` entries, always keeping the first one (it is
  * the root frame and the static image).
  */

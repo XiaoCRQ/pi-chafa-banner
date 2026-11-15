@@ -9,7 +9,7 @@
  * the width it was given. pi's renderer relies on that.
  */
 
-import { BANNER_MAX_WIDTH, type BannerSize } from "./config.ts";
+import { BANNER_MAX_WIDTH, type AutoSize, type BannerSize, type LayoutSettings } from "./config.ts";
 import {
 	centerVisible,
 	isImageLine,
@@ -19,6 +19,9 @@ import {
 	truncateToWidth,
 	visibleWidth,
 } from "./text.ts";
+
+/** Narrowest panel that still renders a readable box. */
+export const MIN_PANEL_WIDTH = 28;
 
 export type ColorToken =
 	| "borderMuted"
@@ -248,15 +251,20 @@ export function resourcePanel(
 	width: number,
 	painter: Painter,
 	totalRows?: number,
-	style: BoxStyle = THIN_BOX,
+	options: { style?: BoxStyle; maxLinesPerSection?: number } = {},
 ): string[] {
+	const style = options.style ?? THIN_BOX;
 	const contentWidth = Math.max(4, Math.floor(width) - 4);
 	const finiteRows = totalRows !== undefined && Number.isFinite(totalRows);
 	const usableRows = finiteRows ? Math.max(0, (totalRows as number) - 2) : Number.POSITIVE_INFINITY;
 	const maxSections = finiteRows ? Math.max(1, Math.floor(usableRows / 2)) : sections.length;
 	const kept = sections.slice(0, maxSections);
 
-	const needs = kept.map((section) => (section.names.length === 0 ? 1 : wrapNames(section.names, contentWidth).length));
+	const cap = options.maxLinesPerSection;
+	const needs = kept.map((section) => {
+		const lines = section.names.length === 0 ? 1 : wrapNames(section.names, contentWidth).length;
+		return cap === undefined ? lines : Math.min(lines, Math.max(1, cap));
+	});
 	const bodyBudget = finiteRows ? Math.max(kept.length, usableRows - kept.length) : Number.MAX_SAFE_INTEGER;
 	const caps = finiteRows ? distributeLines(needs, bodyBudget) : needs;
 
@@ -351,9 +359,46 @@ export const MIN_IMAGE_COLUMNS = 4;
  * Block width for a terminal width, in cells. Mirrors the char-rendering
  * formula in `banner.ts` so both renderers center on the same column.
  */
-export function blockWidthFor(cols: number): number {
+/**
+ * Width of the whole splash block: the configured width, capped by the
+ * terminal (four columns of breathing room) and by `layout.maxWidth`.
+ */
+export function blockWidthFor(cols: number, layout?: LayoutSettings): number {
 	const width = Math.floor(cols);
-	return Math.min(Math.max(20, width - 4), BANNER_MAX_WIDTH);
+	const ceiling = layout ? Math.min(layout.maxWidth, layout.width) : BANNER_MAX_WIDTH;
+	return Math.min(Math.max(20, width - 4), ceiling);
+}
+
+/**
+ * Split the lower block into two panels.
+ *
+ * Equal halves by default (the divider sits dead centre, as the splash design
+ * asks); a numeric `panels.resources.width` gives the right panel its own size
+ * and the left one takes the rest.
+ */
+export function panelWidths(
+	blockWidth: number,
+	gap: number,
+	preferredRight?: AutoSize,
+): { left: number; right: number } {
+	const usable = Math.max(2, blockWidth - gap);
+	if (typeof preferredRight === "number") {
+		const right = Math.min(Math.max(preferredRight, MIN_PANEL_WIDTH), usable - MIN_PANEL_WIDTH);
+		return { left: usable - right, right };
+	}
+	const left = Math.floor(usable / 2);
+	return { left, right: usable - left };
+}
+
+/**
+ * Keep the top `rows` of a character-art frame, biased upwards so faces survive
+ * (same 1/3 rule as `planImageBand`).
+ */
+export function cropTopRows(lines: readonly string[], rows: number): string[] {
+	if (rows >= lines.length) return [...lines];
+	if (rows <= 0) return [];
+	const hidden = Math.floor(((lines.length - rows) * 1) / 3);
+	return lines.slice(hidden, hidden + rows);
 }
 
 /**

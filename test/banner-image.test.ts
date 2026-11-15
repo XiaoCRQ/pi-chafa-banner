@@ -135,7 +135,8 @@ describe("banner: image band structure", () => {
 		const lines = banner({ images: imageSet({ rows: 22 }) }, 40).render(100);
 		expect(imageLines(lines).length).toBe(1);
 		const line = imageLines(lines)[0]!;
-		expect(parseKittyRows(line)).toBe(21);
+		// body (33) - gap (1) - the panels' preferred height (12).
+		expect(parseKittyRows(line)).toBe(20);
 		expect(line).toContain("h=");
 		expect(line).toContain("y=0");
 		expect(lines.some((text) => text.includes("IMAGE"))).toBe(false);

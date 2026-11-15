@@ -17,6 +17,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Banner } from "./banner.ts";
 import {
+	applySourceSize,
 	describeConfig,
 	describeConfigSource,
 	formatSize,
@@ -25,7 +26,7 @@ import {
 } from "./config.ts";
 import { clearCache, FrameError, loadFrames, preflight, type FrameSet } from "./frames.ts";
 import { detachResourceListing, type DetachedListing } from "./host.ts";
-import { clearImageCache, loadImageFrames, type ImageFrameSet } from "./images.ts";
+import { clearImageCache, loadImageFrames, probeSourceSize, type ImageFrameSet } from "./images.ts";
 import { kittyCapabilities } from "./kitty.ts";
 import { imageBandBudget, type ImageBandBudget } from "./layout.ts";
 import { collectResources, emptyResources, type BannerResources } from "./resources.ts";
@@ -285,6 +286,22 @@ async function buildContent(ctx: ExtensionContext, current: SessionState, force 
 	if (current.building) return;
 	current.building = true;
 	try {
+		// `height: "auto"` needs the artwork's aspect ratio, and both renderers must
+		// agree on the band height: chafa's canvas is otherwise a fixed 44x22 box
+		// while the native grid follows the pixels, so the two modes would show
+		// differently shaped splashes.
+		if (current.config.heightAuto && current.config.gifPath) {
+			try {
+				const source = await probeSourceSize(current.config.gifPath);
+				const applied = applySourceSize(current.config, source);
+				if (applied !== current.config) {
+					current.config = applied;
+					current.banner?.setConfig(applied);
+				}
+			} catch {
+				// Keep the width-derived guess; the build below reports real failures.
+			}
+		}
 		if (current.renderer === "kitty") {
 			const budget = imageBudgetFor(current);
 			const images = await loadImageFrames(current.config, { ...budget, force });

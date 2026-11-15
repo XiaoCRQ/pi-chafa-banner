@@ -81,10 +81,20 @@ function makeBanner(): Banner {
 	return new Banner(stubTui, stubTheme, { config, resources: resources(), frames: frames() });
 }
 
-/** Leading spaces, ignoring ANSI (the frame itself is padded to the block). */
+/**
+ * Leading spaces, ignoring ANSI and the deliberate blank rows (the separator
+ * between the art band and the panels, or the art's reserved rows).
+ */
 function leadingSpaces(line: string): number {
 	const plain = stripAnsi(line);
+	if (plain.trim() === "") return Number.POSITIVE_INFINITY;
 	return plain.length - plain.trimStart().length;
+}
+
+/** Visible width, or -1 for a blank row (see `leadingSpaces`). */
+function trailingSpan(line: string): number {
+	const plain = stripAnsi(line);
+	return plain.trim() === "" ? -1 : visibleWidth(line);
 }
 
 const WIDTHS = [40, 60, 80, 100, 140] as const;
@@ -108,7 +118,7 @@ describe("composed splash width contract", () => {
 			// The left column starts at the block's left edge and the right column ends
 			// at its right edge, so the block's bounding box is what must be centered.
 			const left = Math.min(...lines.map(leadingSpaces));
-			const right = width - Math.max(...lines.map(visibleWidth));
+			const right = width - Math.max(...lines.map(trailingSpan));
 			expect(Math.abs(left - right)).toBeLessThanOrEqual(1);
 			banner.dispose();
 		});
@@ -128,13 +138,24 @@ describe("responsive layout", () => {
 		banner.dispose();
 	});
 
-	test("wide width (100) puts the resources panel beside the art", () => {
+	test("wide width (100) stacks the art band above two equal panels", () => {
 		const banner = makeBanner();
 		const lines = banner.render(100).map(stripAnsi);
-		// The first row is an art row followed by the RESOURCES top border.
-		expect(lines[0]).toContain("RESOURCES");
-		expect(lines[0]!.indexOf("╭")).toBeGreaterThan(2);
-		expect(lines.length).toBeLessThan(banner.render(60).length);
+		// Both renderers share one shape: the art owns the whole band, the panels
+		// sit below it and are separated by a vertical divider in the mid column.
+		expect(lines[0]).not.toContain("RESOURCES");
+		const resourcesIndex = lines.findIndex((line) => line.includes("RESOURCES"));
+		const infoIndex = lines.findIndex((line) => line.includes("(pi) CODING AGENT"));
+		expect(infoIndex).toBeGreaterThan(0);
+		expect(resourcesIndex).toBe(infoIndex);
+
+		const top = lines[infoIndex] as string;
+		const start = top.indexOf("╭");
+		const gap = top.indexOf("╮", start) + 1;
+		const left = top.slice(start, gap);
+		const right = top.slice(top.indexOf("╭", gap));
+		expect(visibleWidth(left)).toBe(visibleWidth(right));
+		expect(top.slice(gap, top.indexOf("╭", gap)).trim()).toBe("");
 		banner.dispose();
 	});
 
@@ -165,7 +186,9 @@ describe("box titles", () => {
 		expect(top).toBeDefined();
 		const at = top!.indexOf(" (pi) CODING AGENT ");
 		const leftDashes = at - top!.indexOf("╭") - 1;
-		const rightDashes = top!.lastIndexOf("╮") - (at + " (pi) CODING AGENT ".length);
+		// The info card shares its row with the RESOURCES box, so stop at its own
+		// top-right corner rather than the last one on the line.
+		const rightDashes = top!.indexOf("╮", at) - (at + " (pi) CODING AGENT ".length);
 		expect(Math.abs(leftDashes - rightDashes)).toBeLessThanOrEqual(1);
 		banner.dispose();
 	});

@@ -11,31 +11,24 @@
  */
 
 import type { Component, Theme, TUI } from "@earendil-works/pi-coding-agent";
-import {
-	BANNER_MAX_WIDTH,
-	BANNER_MIN_COMPACT_WIDTH,
-	BANNER_MIN_STACK_WIDTH,
-	formatSize,
-	type BannerConfig,
-} from "./config.ts";
+import { formatSize, type BannerConfig, type PanelField, type ResourceSectionId } from "./config.ts";
 import type { FrameSet } from "./frames.ts";
 import type { ImageFrameSet } from "./images.ts";
 import { buildKittyLine, cropKittyRoot, encodeKittyDelete, fallbackImageId, reassignKittyImageId, replaceKittyPayload } from "./kitty.ts";
 import {
 	IMAGE_GAP_ROWS,
-	MAX_LOWER_ROWS,
-	MIN_LOWER_ROWS,
 	blockWidthFor,
-	centerBlock,
-	clampLines,
 	compactSplash,
+	cropTopRows,
 	infoBox,
 	panel,
+	panelWidths,
 	planImageBand,
 	resourcePanel,
 	splashRows,
 	themePainter,
 	twoColumn,
+	wrapNames,
 	type ImageBandPlan,
 	type Painter,
 	type ResourceSection,
@@ -43,14 +36,8 @@ import {
 import type { BannerResources } from "./resources.ts";
 import { isImageLine, maxVisibleWidth, padVisible, truncateToWidth, visibleWidth } from "./text.ts";
 
-/** Width of the gap between the image column and the resources panel. */
-const COLUMN_GAP = 4;
-/** Minimum width that still fits a readable RESOURCES panel. */
-const MIN_PANEL_WIDTH = 28;
 /** Info card: 3 rows + 2 borders. */
 const INFO_BOX_ROWS = 5;
-/** Below this many rows the header is cropped instead of shown in full. */
-const MIN_CROP_ROWS = 10;
 /** Lines the image-mode "no picture yet" card occupies (never height-dependent). */
 const IMAGE_PLACEHOLDER_ROWS = 5;
 /** Floor for the info/panel block when the terminal cannot fit its ideal size. */
@@ -407,219 +394,175 @@ export class Banner implements Component {
 	render(width: number): string[] {
 		if (!this.visible) return [];
 		const cols = Math.max(1, Math.floor(width));
-		// Too narrow for boxes: the same three lines either way, no image band.
-		if (cols < BANNER_MIN_COMPACT_WIDTH) {
+		const layout = this.config.layout;
+		// Too narrow for boxes: three plain lines, no picture.
+		if (cols < layout.compactMinWidth) {
 			return compactSplash(cols, this.painter, {
 				version: this.resources.version,
 				model: this.resources.model,
 				theme: this.resources.theme,
 			});
 		}
-		if (this.renderer === "kitty") return this.renderImage(cols, blockWidthFor(cols));
-		return this.renderChars(width);
-	}
 
-	/**
-	 * Character-cell rendering (chafa frames). Kept byte-for-byte identical to
-	 * the original single-path implementation: it is the regression baseline and
-	 * the fallback for every terminal without the kitty protocol.
-	 */
-	private renderChars(width: number): string[] {
-		const cols = Math.max(1, Math.floor(width));
-		const painter = this.painter;
-		const resources = this.resources;
-
-		// Tiny terminal: no boxes, just the three facts that matter.
-		if (cols < BANNER_MIN_COMPACT_WIDTH) {
-			return compactSplash(cols, painter, {
-				version: resources.version,
-				model: resources.model,
-				theme: resources.theme,
-			});
-		}
-
-		const blockWidth = Math.min(Math.max(20, cols - 4), BANNER_MAX_WIDTH);
-		const rawImage = this.currentFrame();
-		const imageWidth = rawImage ? Math.min(blockWidth, maxVisibleWidth(rawImage)) : 0;
-		const infoWidth = Math.min(Math.max(imageWidth || 40, 32), blockWidth);
-		const leftWidth = Math.max(infoWidth, Math.min(imageWidth, blockWidth));
-
-		const sections: ResourceSection[] = [
-			{ title: "Context", names: resources.context },
-			{ title: "Skills", names: resources.skills },
-			{ title: "Themes", names: resources.themes },
-			{ title: "Extensions", names: resources.extensions },
+		const blockWidth = blockWidthFor(cols, layout);
+		const leftPad = Math.max(0, Math.floor((cols - blockWidth) / 2));
+		const totalRows = splashRows(this.tui.terminal?.rows ?? 40);
+		const body = Math.max(0, totalRows - (this.status ? 1 : 0));
+		const band = this.bandLines(blockWidth, body);
+		const lines = [
+			...band,
+			...this.lowerLines(blockWidth, Math.max(0, body - band.length)),
+			...this.statusLines(blockWidth),
 		];
 
-		const rightWidth = blockWidth - leftWidth - COLUMN_GAP;
-		const twoColumns = blockWidth >= BANNER_MIN_STACK_WIDTH && rightWidth >= MIN_PANEL_WIDTH;
-		// In the stacked layout the panel is a sibling below the info card, so its
-		// height must be part of the crop budget too (check the two-column branch
-		// below, where the panel is padded to the left column instead).
-		const stackedPanel = twoColumns ? undefined : resourcePanel("RESOURCES", sections, blockWidth, painter);
-
-		let imageBudget: number | undefined;
-		const rows = this.tui.terminal?.rows;
-		if (rows && rows >= MIN_CROP_ROWS) {
-			// Deliberately *not* `CHROME_ROWS` here: characters are ordinary document
-			// rows, so an over-tall splash simply scrolls with the conversation (the
-			// pre-v1.1 behaviour, kept byte-identical). Only the native image band
-			// must fit the viewport — see `renderImage()`.
-			const blockOverhead = 1 + INFO_BOX_ROWS + (this.status ? 1 : 0);
-			const panelOverhead = stackedPanel ? 1 + stackedPanel.length : 0;
-			imageBudget = Math.max(0, rows - blockOverhead - panelOverhead);
-		}
-		const image = this.imageFor(blockWidth, imageBudget);
-
-		const left: string[] = [];
-		if (image) {
-			for (const line of image) left.push(truncateToWidth(padVisible(line, leftWidth), leftWidth, ""));
-		} else {
-			left.push(...this.placeholder(leftWidth));
-		}
-		left.push("");
-		left.push(
-			...infoBox(
-				"(pi) CODING AGENT",
-				[
-					{ label: "version", value: resources.version },
-					{ label: "model", value: resources.model },
-					{ label: "theme", value: resources.theme },
-				],
-				leftWidth,
-				painter,
-				{ fillTo: INFO_BOX_ROWS },
-			),
-		);
-		if (this.status) {
-			left.push(painter.fg("dim", truncateToWidth(this.status, leftWidth, "…")));
-		}
-
-		let lines: string[];
-		if (twoColumns) {
-			// Two columns: the panel is padded to the left column's height so the
-			// outer rectangle lines up exactly.
-			const right = resourcePanel("RESOURCES", sections, rightWidth, painter, left.length);
-			lines = twoColumn(left, right, COLUMN_GAP, blockWidth);
-		} else {
-			lines = [...centerBlock(left, blockWidth), "", ...(stackedPanel ?? [])];
-		}
-
-		// Pad to the block rectangle, then center the block in the terminal.
-		const padded = lines.map((line) => padVisible(line, blockWidth));
-		const leftPad = Math.max(0, Math.floor((cols - blockWidth) / 2));
-		const shifted = leftPad === 0 ? padded : padded.map((line) => " ".repeat(leftPad) + line);
-		// Trailing spaces are harmless; enforce the width contract regardless.
-		return clampLines(shifted, cols);
-	}
-
-	// -- native image rendering --------------------------------------------
-
-	/**
-	 * Split layout: the picture owns a full-width band at the top, everything
-	 * else stacks underneath.
-	 *
-	 * This is not cosmetic. pi's `getKittyImageReservedRows` stops counting at
-	 * the first following line with `visibleWidth > 0` (a single space counts),
-	 * so the `rows-1` lines after the sequence must be the exact empty string,
-	 * and nothing may sit beside the image in the same row.
-	 */
-	private renderImage(cols: number, blockWidth: number): string[] {
-		const terminalColumns = this.tui.terminal?.columns ?? cols;
-		const terminalRows = this.tui.terminal?.rows ?? 40;
-		// Resize first: it may hand us a new image id, and that id must be on screen
-		// in the very frame the terminal reflows.
-		this.syncTerminalShape(terminalColumns, terminalRows);
-		const images = this.images;
-		// Only the document body is ours; see `CHROME_ROWS` in layout.ts.
-		const totalRows = splashRows(terminalRows);
-		const statusRows = this.status ? 1 : 0;
-		const leftPad = Math.max(0, Math.floor((cols - blockWidth) / 2));
-		const out: string[] = [];
-
-		// Crop the source rectangle instead of dropping the picture: a short
-		// terminal then shows fewer rows of real pixels, not a placeholder card.
-		const plan = images
-			? planImageBand({
-					totalRows,
-					statusRows,
-					availableColumns: Math.max(0, Math.min(blockWidth, cols - 2 * leftPad)),
-					image: {
-						rows: images.rows,
-						columns: images.columns,
-						pixelWidth: images.pixelWidth,
-						pixelHeight: images.pixelHeight,
-					},
-				})
-			: undefined;
-
-		if (images && plan) {
-			const imgPad = Math.max(0, Math.floor((blockWidth - plan.columns) / 2));
-			// The only place a line may start with spaces and hold an escape.
-			out.push((imgPad > 0 ? " ".repeat(imgPad) : "") + this.imageLine(images, plan));
-			// Continuation rows must be "" — see the doc comment above.
-			for (let index = 1; index < plan.rows; index++) out.push("");
-			for (let index = 0; index < IMAGE_GAP_ROWS; index++) out.push("");
-		} else {
-			out.push(...this.imagePlaceholder(blockWidth), "");
-		}
-
-		const room = Math.max(0, totalRows - statusRows - out.length);
-		// Below the ideal height keep whatever rows exist (never grow the block
-		// past the terminal, that is what makes pi scroll the whole header away).
-		const budget =
-			room >= MIN_LOWER_ROWS ? Math.min(room, MAX_LOWER_ROWS) : Math.max(1, Math.min(MIN_LOWER_FLOOR, room));
-		out.push(...this.renderLower(blockWidth, budget));
-		if (this.status) out.push(...this.statusLines(blockWidth));
-
-		return out.map((line) => {
+		return lines.map((line) => {
 			if (line === "") return "";
+			// An image sequence owns its row: pi derives the reserved row count from
+			// the raw line, so only the centering pad may precede it.
 			if (isImageLine(line)) return leftPad > 0 ? " ".repeat(leftPad) + line : line;
 			return truncateToWidth(" ".repeat(leftPad) + padVisible(line, blockWidth), cols, "");
 		});
 	}
 
-	/** Info card + RESOURCES panel, on the same rows in both layouts. */
-	private renderLower(blockWidth: number, budget: number): string[] {
+	/**
+	 * Top of the splash: one full-width band for the artwork.
+	 *
+	 * Both renderers produce the same shape — a single pixel line plus `rows-1`
+	 * empty continuations, or chafa's character rows — so the panel block below
+	 * starts on the same row either way and the two modes look identical.
+	 */
+	private bandLines(blockWidth: number, bodyRows: number): string[] {
+		const rows =
+			this.renderer === "kitty" ? this.pixelBand(blockWidth, bodyRows) : this.charBand(blockWidth, bodyRows);
+		return [...rows, ...Array.from({ length: IMAGE_GAP_ROWS }, () => "")];
+	}
+
+	/** Native pixels: one sequence line, `plan.rows - 1` empty continuation rows. */
+	private pixelBand(blockWidth: number, bodyRows: number): string[] {
+		const terminalColumns = this.tui.terminal?.columns ?? blockWidth;
+		const terminalRows = this.tui.terminal?.rows ?? 40;
+		// Resize first: it may hand us a new image id, and that id must be on screen
+		// in the very frame the terminal reflows.
+		this.syncTerminalShape(terminalColumns, terminalRows);
+
+		const images = this.images;
+		if (!images) return this.imagePlaceholder(blockWidth);
+
+		// Crop the source rectangle instead of dropping the picture: a short
+		// terminal then shows fewer rows of real pixels, not a placeholder card.
+		const plan = planImageBand({
+			totalRows: bodyRows,
+			statusRows: 0,
+			availableColumns: blockWidth,
+			lowerRows: this.config.layout.lowerRows,
+			image: {
+				rows: images.rows,
+				columns: images.columns,
+				pixelWidth: images.pixelWidth,
+				pixelHeight: images.pixelHeight,
+			},
+		});
+		if (!plan) return this.imagePlaceholder(blockWidth);
+
+		const imgPad = Math.max(0, Math.floor((blockWidth - plan.columns) / 2));
+		const rows = [(imgPad > 0 ? " ".repeat(imgPad) : "") + this.imageLine(images, plan)];
+		// Continuation rows must be "" — see the class doc and AGENTS.md §3.10.
+		for (let index = 1; index < plan.rows; index++) rows.push("");
+		return rows;
+	}
+
+	/** Character art: chafa rows, cropped from the top when the terminal is short. */
+	private charBand(blockWidth: number, bodyRows: number): string[] {
+		const frame = this.currentFrame();
+		if (!frame) return this.placeholder(blockWidth);
+		const lower = Math.min(
+			this.config.layout.lowerRows,
+			Math.max(MIN_LOWER_FLOOR, bodyRows - IMAGE_GAP_ROWS - 1),
+		);
+		const room = Math.max(1, bodyRows - IMAGE_GAP_ROWS - lower);
+		const rows = cropTopRows(frame, Math.min(frame.length, room));
+		const width = Math.min(blockWidth, maxVisibleWidth(rows));
+		const pad = Math.max(0, Math.floor((blockWidth - width) / 2));
+		return rows.map((line) => " ".repeat(pad) + truncateToWidth(padVisible(line, width), width, ""));
+	}
+
+	/**
+	 * The block under the picture: info card on the left, RESOURCES on the right,
+	 * equal widths, equal heights, one shared divider column.
+	 */
+	private lowerLines(blockWidth: number, budget: number): string[] {
+		const layout = this.config.layout;
 		const painter = this.painter;
+		const infoEnabled = this.config.panels.info.enabled;
+		const resourcesEnabled = this.config.panels.resources.enabled;
+		if (!infoEnabled && !resourcesEnabled) return [];
+
+		const infoRows = this.infoRows();
+		const sections = this.sections();
+		const stacked = blockWidth < layout.twoColumnMinWidth;
+		const widths = panelWidths(blockWidth, layout.gap, this.config.panels.resources.width);
+		const options = { maxLinesPerSection: this.config.panels.resources.maxLinesPerSection };
+
+		// Both boxes share one height so their bottom borders line up; content that
+		// would not fit grows the box up to the space the document body allows.
+		const wanted = this.config.panels.resources.height;
+		const contentRows = sections.reduce((sum, section) => {
+			const lines =
+				section.names.length === 0 ? 1 : wrapNames(section.names, Math.max(4, widths.right - 4)).length;
+			return sum + Math.min(lines, options.maxLinesPerSection);
+		}, 2);
+		const height = Math.max(
+			3,
+			Math.min(
+				Math.max(budget, 3),
+				Math.max(layout.lowerRows, typeof wanted === "number" ? wanted : 0, contentRows),
+			),
+		);
+
+		if (!resourcesEnabled) {
+			return infoEnabled ? infoBox("(pi) CODING AGENT", infoRows, blockWidth, painter, { fillTo: height }) : [];
+		}
+		if (!infoEnabled) {
+			return resourcePanel("RESOURCES", sections, blockWidth, painter, height, options);
+		}
+		if (stacked) {
+			const panelRows = Math.max(5, Math.min(height, budget - INFO_BOX_ROWS - 1));
+			return [
+				...infoBox("(pi) CODING AGENT", infoRows, blockWidth, painter, { fillTo: INFO_BOX_ROWS }),
+				"",
+				...resourcePanel("RESOURCES", sections, blockWidth, painter, panelRows, options),
+			];
+		}
+
+		const left = infoBox("(pi) CODING AGENT", infoRows, widths.left, painter, { fillTo: height });
+		const right = resourcePanel("RESOURCES", sections, widths.right, painter, height, options);
+		return twoColumn(left, right, layout.gap, blockWidth);
+	}
+
+	/** Facts shown in the coding-agent box, in config order. */
+	private infoRows(): Array<{ label: string; value: string }> {
 		const resources = this.resources;
-		const sections: ResourceSection[] = [
-			{ title: "Context", names: resources.context },
-			{ title: "Skills", names: resources.skills },
-			{ title: "Themes", names: resources.themes },
-			{ title: "Extensions", names: resources.extensions },
-		];
-		const infoRows = [
-			{ label: "version", value: resources.version },
-			{ label: "model", value: resources.model },
-			{ label: "theme", value: resources.theme },
-		];
+		const values: Record<PanelField, string> = {
+			version: resources.version,
+			model: resources.model,
+			theme: resources.theme,
+			gif: this.config.gifPath ?? "(bundled)",
+			frames: this.frames ? `${this.frames.frames.length}/${this.frames.totalFrames}` : "pending",
+			renderer: this.renderer,
+		};
+		return this.config.panels.info.fields.map((field) => ({ label: field, value: values[field] ?? "" }));
+	}
 
-		if (blockWidth >= BANNER_MIN_STACK_WIDTH && budget >= MIN_LOWER_ROWS) {
-			const infoWidth = Math.min(
-				Math.max(Math.round(blockWidth * 0.38), 32),
-				blockWidth - COLUMN_GAP - MIN_PANEL_WIDTH,
-			);
-			const rightWidth = blockWidth - infoWidth - COLUMN_GAP;
-			const height = Math.min(budget, MAX_LOWER_ROWS);
-			const left = infoBox("(pi) CODING AGENT", infoRows, infoWidth, painter, { fillTo: height });
-			const right = resourcePanel("RESOURCES", sections, rightWidth, painter, height);
-			return twoColumn(left, right, COLUMN_GAP, blockWidth);
-		}
-
-		// Anything below INFO_BOX_ROWS + gap + MIN_PANEL (11 rows) cannot show both
-		// boxes: keep the info card alone rather than spilling past the terminal.
-		if (budget < MIN_LOWER_ROWS) {
-			return infoBox("(pi) CODING AGENT", infoRows, blockWidth, painter, {
-				fillTo: Math.max(3, Math.min(budget, INFO_BOX_ROWS)),
-			});
-		}
-
-		const lines = infoBox("(pi) CODING AGENT", infoRows, blockWidth, painter, { fillTo: INFO_BOX_ROWS });
-		lines.push("");
-		const panelRows = Math.max(5, Math.min(budget - INFO_BOX_ROWS - 1, MAX_LOWER_ROWS));
-		lines.push(...resourcePanel("RESOURCES", sections, blockWidth, painter, panelRows));
-		return lines;
+	/** Resource groups the RESOURCES box lists, in config order. */
+	private sections(): ResourceSection[] {
+		const resources = this.resources;
+		const all: Record<ResourceSectionId, ResourceSection> = {
+			context: { title: "Context", names: resources.context },
+			skills: { title: "Skills", names: resources.skills },
+			themes: { title: "Themes", names: resources.themes },
+			extensions: { title: "Extensions", names: resources.extensions },
+		};
+		return this.config.panels.resources.sections.map((id) => all[id]).filter(Boolean);
 	}
 
 	/** One status line, kept as short as the block allows. */

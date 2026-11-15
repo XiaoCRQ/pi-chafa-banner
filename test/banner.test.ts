@@ -134,13 +134,13 @@ describe("Banner degraded states", () => {
 		banner.dispose();
 	});
 
-	test("chars mode keeps the pre-image crop budget (chars scroll away, images cannot)", () => {
-		// `renderImage()` must fit `rows - CHROME_ROWS`, but the character path is a
-		// plain document block: an over-tall splash just scrolls with the chat, which
-		// is the shipped v1.0 behaviour we must not change (byte-identical output).
+	test("chars mode crops the canvas to the document body, like the native band", () => {
+		// Both renderers share one layout, so the character path must also fit
+		// `splashRows` — the band is cropped from the top third instead of scrolling
+		// the panels out of view.
 		const { banner } = makeBanner({ frames: frames(), rows: 30 });
 		const lines = banner.render(60);
-		expect(lines.length).toBeGreaterThan(30 - CHROME_ROWS);
+		expect(lines.length + CHROME_ROWS).toBeLessThanOrEqual(30);
 		for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(60);
 		banner.dispose();
 	});

@@ -26,6 +26,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { Banner } from "../src/banner.ts";
 import {
+	applySourceSize,
 	clamp,
 	DEFAULTS,
 	formatSize,
@@ -35,7 +36,7 @@ import {
 	type BannerConfig,
 } from "../src/config.ts";
 import { FrameError, loadFrames, missingToolsFor, preflight, type FrameSet } from "../src/frames.ts";
-import { loadImageFrames, type ImageFrameSet } from "../src/images.ts";
+import { loadImageFrames, probeSourceSize, type ImageFrameSet } from "../src/images.ts";
 import { imageBandBudget, parseKittyRows } from "../src/layout.ts";
 import { isImageLine, visibleWidth } from "../src/text.ts";
 import { collectResources, emptyResources, type BannerResources } from "../src/resources.ts";
@@ -384,9 +385,20 @@ async function main(): Promise<void> {
 	const args = parseArgs(process.argv.slice(2));
 	const config: BannerConfig = { ...loadJsonConfig(args.config), enabled: true };
 	if (args.gif) config.gifPath = args.gif;
-	if (args.size) config.size = parseSize(args.size, config.size);
+	if (args.size) {
+		config.size = parseSize(args.size, config.size);
+		// An explicit canvas is explicit: do not derive it from the artwork.
+		config.heightAuto = false;
+	}
 	if (args.fps !== undefined) config.fps = args.fps;
 	if (args.static) config.static = true;
+	if (config.heightAuto && config.gifPath) {
+		try {
+			Object.assign(config, applySourceSize(config, await probeSourceSize(config.gifPath)));
+		} catch {
+			// Missing ffmpeg: the width-derived height is a fine fallback.
+		}
+	}
 
 	stubTerminal.rows = args.rows;
 	stubTerminal.columns = args.width;
