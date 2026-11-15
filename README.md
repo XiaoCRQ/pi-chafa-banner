@@ -89,12 +89,11 @@ if you want autocompletion in your editor.
 
 ## Credits
 
-- [beautiful-pi](https://github.com/danielmrdev/beautiful-pi) (MIT): the
-  inspiration for a `setHeader` splash with a `RESOURCES` box. No code copied.
-- [chafa](https://hpjansson.org/chafa/) turns pixels into characters, `ffmpeg`
-  digs the frames out of the gif, and
-  [`@earendil-works/pi-tui`](https://github.com/earendil-works/pi) supplies the
-  width tables everything is measured with.
+- Inspiration: [beautiful-pi](https://github.com/danielmrdev/beautiful-pi) — a
+  `setHeader` splash with a `RESOURCES` box.
+- Built on [chafa](https://hpjansson.org/chafa/) for the art, `ffmpeg` for the
+  frames, and [`@earendil-works/pi-tui`](https://github.com/earendil-works/pi)
+  for the width tables.
 
 Curious how it works? [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) has the module
 map, the data flow and the invariants. A native kitty-image version waits on the
