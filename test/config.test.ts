@@ -173,8 +173,20 @@ describe("config: tolerance", () => {
 	});
 
 	it("collapses duplicate list entries", () => {
-		const settings = validateSettings({ panels: { resources: { sections: ["themes", "themes", "skills"] } } });
-		expect(settings.panels.resources.sections).toEqual(["themes", "skills"]);
+		const settings = validateSettings({ panels: { resources: { sections: ["context", "context", "skills"] } } });
+		expect(settings.panels.resources.sections).toEqual(["context", "skills"]);
+	});
+
+	it("rejects the retired `theme` info field", () => {
+		const settings = validateSettings({ panels: { info: { fields: ["version", "theme"] } } });
+		expect(settings.panels.info.fields).toEqual(["version"]);
+		expect(settings.warnings.join("\n")).toContain("ignored unknown entry \"theme\"");
+	});
+
+	it("rejects the retired Themes resource section", () => {
+		const settings = validateSettings({ panels: { resources: { sections: ["context", "themes", "extensions"] } } });
+		expect(settings.panels.resources.sections).toEqual(["context", "extensions"]);
+		expect(settings.warnings.join("\n")).toContain("ignored unknown entry \"themes\"");
 	});
 });
 

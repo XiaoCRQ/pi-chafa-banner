@@ -161,7 +161,7 @@ describe("session lifecycle", () => {
 		expect(host.headers.length).toBe(1);
 
 		const first = host.render(100);
-		expect(first.join("\n")).toContain("(pi) CODING AGENT");
+		expect(first.join("\n")).toContain("CODING AGENT");
 		for (const line of first) expect(visibleWidth(line)).toBeLessThanOrEqual(100);
 
 		// The frame build is asynchronous; give the rejected stat a tick.

@@ -34,11 +34,10 @@ function resources(): BannerResources {
 		...emptyResources(),
 		version: "1.5.2",
 		model: "anthropic/claude-sonnet-4-5",
-		theme: "dark",
+		thinking: "high",
 		context: ["AGENTS.md"],
 		skills: ["btw", "workflow-patterns"],
-		themes: ["dark", "light"],
-		extensions: ["pi-btw", "pi-chafa-banner"],
+		extensions: ["pi-btw:btw.ts", "pi-chafa-banner"],
 	};
 }
 
@@ -134,7 +133,7 @@ describe("Banner degraded states", () => {
 		// An 11-row body: the info card (5 rows + its blank) keeps its room and the
 		// 12-row artwork is clipped to what is left, so nothing overflows.
 		expect(lines.length).toBe(11);
-		expect(lines.join("\n")).toContain("(pi) CODING AGENT");
+		expect(lines.join("\n")).toContain("CODING AGENT");
 		banner.dispose();
 	});
 

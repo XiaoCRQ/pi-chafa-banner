@@ -5,7 +5,7 @@
  * Everything here is pure and takes a `Painter`, so tests run without colors.
  */
 
-import { centerVisible, padVisible, truncateToWidth, visibleWidth } from "../text.ts";
+import { centerVisible, truncateToWidth, visibleWidth } from "../text.ts";
 import { paintForeground, resolvePalette, type PaletteSettings } from "./palette.ts";
 
 
@@ -98,11 +98,18 @@ export interface PanelOptions {
 export interface InfoRow {
 	label: string;
 	value: string;
+	/**
+	 * Short trailing badge that survives truncation, e.g. the thinking level after
+	 * the model name. Rendered muted, one space after the value.
+	 */
+	suffix?: string;
 }
 
 export interface ResourceSection {
 	title: string;
 	names: readonly string[];
+	/** One name per line instead of the comma-wrapped flow (used by Extensions). */
+	stacked?: boolean;
 }
 
 /**
@@ -163,12 +170,18 @@ export function infoBox(
 	options: PanelOptions = {},
 ): string[] {
 	const contentWidth = Math.max(0, Math.floor(width) - 4);
-	const labelWidth = rows.reduce((max, row) => Math.max(max, visibleWidth(row.label)), 0);
-	const valueWidth = Math.max(1, contentWidth - labelWidth - 2);
+	// One fact per line: `[Label] value`, where the bracketed label reuses the
+	// `[Context]` heading style of the RESOURCES panel.
 	const body = rows.map((row) => {
-		const label = painter.fg("muted", padVisible(row.label, labelWidth));
+		const label = painter.bold(painter.fg("sectionTitle", `[${row.label}]`));
+		const labelWidth = visibleWidth(label);
+		// The suffix keeps its own budget, so a long model name degrades to an
+		// ellipsis instead of pushing the thinking level off the card.
+		const suffix = row.suffix ? painter.fg("muted", row.suffix) : "";
+		const suffixWidth = suffix ? visibleWidth(suffix) + 1 : 0;
+		const valueWidth = Math.max(1, contentWidth - labelWidth - 1 - suffixWidth);
 		const value = painter.fg("text", truncateToWidth(row.value, valueWidth, "…"));
-		return `${label}  ${value}`;
+		return `${label} ${value}${suffix ? ` ${suffix}` : ""}`;
 	});
 	return panel(title, body, width, painter, options);
 }
@@ -245,20 +258,43 @@ export function distributeLines(needs: readonly number[], budget: number): numbe
 	return caps;
 }
 
-/** `[Context]` heading plus dim, wrapped, 2-space-indented names. */
+/**
+ * One name per line, 2-space indent. When the row budget runs out the tail
+ * collapses to `, ...` (or a bare `...` line) so the cut is visible.
+ */
+export function stackNames(names: readonly string[], width: number, maxLines = Number.POSITIVE_INFINITY): string[] {
+	const indent = "  ";
+	const avail = Math.max(4, Math.floor(width));
+	const limit = Math.max(1, Math.floor(maxLines));
+	const overflow = names.length > limit;
+	const shown = overflow ? limit - 1 : names.length;
+	const out = names.slice(0, shown).map((name) => indent + truncateToWidth(name, avail - indent.length, "…"));
+	if (!overflow) return out;
+	if (shown === 0) {
+		const first = indent + truncateToWidth(names[0] ?? "", Math.max(1, avail - indent.length - 5), "");
+		out.push(appendEllipsis(first, avail));
+	} else {
+		out.push(`${indent}...`);
+	}
+	return out;
+}
+
+/** `[Context]` heading plus dim, wrapped (or stacked), 2-space-indented names. */
 export function resourceSection(
 	title: string,
 	names: readonly string[],
 	width: number,
 	painter: Painter,
 	maxLines = Number.POSITIVE_INFINITY,
+	stacked = false,
 ): string[] {
 	const out = [painter.bold(painter.fg("sectionTitle", `[${title}]`))];
 	if (names.length === 0) {
 		out.push(painter.fg("dim", "  (none)"));
 		return out;
 	}
-	for (const line of wrapNames(names, width, maxLines)) out.push(painter.fg("dim", line));
+	const lines = stacked ? stackNames(names, width, maxLines) : wrapNames(names, width, maxLines);
+	for (const line of lines) out.push(painter.fg("dim", line));
 	return out;
 }
 
@@ -284,7 +320,10 @@ export function resourcePanel(
 
 	const cap = options.maxLinesPerSection;
 	const needs = kept.map((section) => {
-		const lines = section.names.length === 0 ? 1 : wrapNames(section.names, contentWidth).length;
+		if (section.names.length === 0) return 1;
+		const lines = section.stacked
+			? section.names.length
+			: wrapNames(section.names, contentWidth).length;
 		return cap === undefined ? lines : Math.min(lines, Math.max(1, cap));
 	});
 	const bodyBudget = finiteRows ? Math.max(kept.length, usableRows - kept.length) : Number.MAX_SAFE_INTEGER;
@@ -292,7 +331,7 @@ export function resourcePanel(
 
 	const body: string[] = [];
 	kept.forEach((section, index) => {
-		body.push(...resourceSection(section.title, section.names, contentWidth, painter, caps[index] ?? 1));
+		body.push(...resourceSection(section.title, section.names, contentWidth, painter, caps[index] ?? 1, section.stacked));
 	});
 	return panel(title, body, width, painter, { fillTo: totalRows, style });
 }

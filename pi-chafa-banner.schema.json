@@ -112,13 +112,12 @@
               "default": true
             },
             "fields": {
-              "description": "Which facts the coding-agent box shows, in order.",
+              "description": "Which facts the coding-agent box shows, in order. version = pi's own version; the thinking level trails the model value.",
               "type": "array",
               "items": {
                 "enum": [
                   "version",
                   "model",
-                  "theme",
                   "gif",
                   "frames"
                 ]
@@ -141,7 +140,6 @@
                 "enum": [
                   "context",
                   "skills",
-                  "themes",
                   "extensions"
                 ]
               }
@@ -204,7 +202,7 @@
           "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"
         },
         "sectionTitle": {
-          "description": "Section headings inside the RESOURCES box: [Context], [Skills], [Themes], [Extensions].",
+          "description": "Section headings inside the RESOURCES box: [Context], [Skills], [Extensions] (and [Version], [Model] inside the info card).",
           "type": "string",
           "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"
         },

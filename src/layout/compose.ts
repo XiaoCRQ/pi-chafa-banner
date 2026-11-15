@@ -50,11 +50,13 @@ export function clampLines(lines: readonly string[], width: number): string[] {
 }
 
 /** 3-line splash for terminals too narrow for boxes (< 32 columns). */
-export function compactSplash(width: number, painter: Painter, info: { version: string; model: string; theme: string }): string[] {
+export function compactSplash(width: number, painter: Painter, info: { version: string; model: string; thinking: string }): string[] {
+	// Same shape as the info card: the thinking level trails the model.
+	const model = info.thinking === "unknown" ? info.model : `${info.model} · ${info.thinking}`;
 	const lines = [
-		`${painter.bold(painter.fg("accent", "π pi"))} ${info.version}`,
-		painter.fg("text", info.model),
-		painter.fg("dim", `${info.theme} · chafa`),
+		`${painter.bold(painter.fg("accent", "π pi-chafa-banner"))} ${info.version}`,
+		painter.fg("text", model),
+		painter.fg("dim", "chafa"),
 	];
 	return lines.map((line) => centerVisible(truncateToWidth(line, Math.max(1, width), "…"), width).trimEnd());
 }

@@ -58,6 +58,20 @@ export default function piChafaBanner(pi: ExtensionAPI): void {
 		}
 	});
 
+	// Swapping model or thinking level changes the info card; re-collect it right
+	// away instead of waiting for the next `before_agent_start`.
+	pi.on("model_select", (event, ctx) => {
+		const current = session.current;
+		if (!current) return;
+		void refreshResources(ctx, current, { model: event.model });
+	});
+
+	pi.on("thinking_level_select", (event, ctx) => {
+		const current = session.current;
+		if (!current) return;
+		void refreshResources(ctx, current, { thinking: event.level });
+	});
+
 	pi.on("session_shutdown", (_event, ctx) => {
 		try {
 			session.current?.banner?.dispose();

@@ -36,8 +36,10 @@ import {
 import type { BannerResources } from "../resources.ts";
 import { padVisible, truncateToWidth, visibleWidth } from "../text.ts";
 
-/** Info card: 3 content rows + 2 borders. */
-const INFO_BOX_ROWS = 5;
+/**
+ * Height of the info card is exactly `panels.info.fields + 2` borders — it is
+ * measured, never padded, so the splash carries no empty rows.
+ */
 /** Width of the gap between the two columns. */
 const COLUMN_GAP_MIN = 2;
 
@@ -251,7 +253,7 @@ export class Banner implements Component {
 			return compactSplash(cols, this.painter, {
 				version: this.resources.version,
 				model: this.resources.model,
-				theme: this.resources.theme,
+				thinking: this.resources.thinking,
 			});
 		}
 
@@ -296,18 +298,23 @@ export class Banner implements Component {
 			? this.cropFrame(frame, leftWidth, this.imageBudget(twoColumns))
 			: this.placeholder(leftWidth);
 		const out = [...rows];
-		if (this.config.panels.info.enabled) {
-			out.push("", ...infoBox("(pi) CODING AGENT", this.infoRows(), leftWidth, this.painter, { fillTo: INFO_BOX_ROWS }));
-		}
+		const info = this.config.panels.info.enabled ? this.infoRows() : [];
+		if (info.length > 0) out.push("", ...infoBox("CODING AGENT", info, leftWidth, this.painter));
 		return out;
 	}
 
 	/** Rows the artwork may use: body height minus the info card, gap and status. */
 	private imageBudget(twoColumns: boolean): number {
 		const totalRows = splashRows(this.tui.terminal?.rows ?? 40);
-		const overhead = (this.config.panels.info.enabled ? INFO_BOX_ROWS + 1 : 0) + (this.status ? 1 : 0);
+		const card = this.infoBoxRows();
+		const overhead = (card > 0 ? card + 1 : 0) + (this.status ? 1 : 0);
 		const stacked = twoColumns ? 0 : this.stackedHeight() + 1;
 		return Math.max(1, totalRows - overhead - stacked);
+	}
+
+	/** Rows the info card needs: one per configured fact, plus the two borders. */
+	private infoBoxRows(): number {
+		return this.config.panels.info.enabled ? this.config.panels.info.fields.length + 2 : 0;
 	}
 
 	/** Height of the RESOURCES panel when it sits below the left block. */

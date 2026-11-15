@@ -34,7 +34,7 @@ src/config/
   schema.ts                 types, defaults, limits, DEFAULT_FILE
   validate.ts               tolerant parser: warn per key, never throw
   load.ts                   discovery, gif resolution, auto height, overrides
-src/resources.ts            version/model/theme/context files/skills/themes/extensions
+src/resources.ts            version/model+thinking/context files/skills/extensions
 src/host.ts                 pure-memory detach of pi's `loadedResourcesContainer`
 ```
 
@@ -47,7 +47,7 @@ The `src/*.ts` files at the top level are barrels (`banner.ts`, `config.ts`,
 pi session_start
   └─ bootstrap()
        ├─ loadSessionConfig()          JSON next to the plugin, tolerant
-       ├─ collectResources()           commands/settings/theme probes, each in try/catch
+       ├─ collectResources()           commands/settings/manifest probes, each in try/catch
        ├─ installHeader()              ctx.ui.setHeader(component) + detach pi's listing
        └─ buildContent()               async: probe aspect ratio, ffmpeg+chafa, cache
 

@@ -65,8 +65,7 @@ async function collectFor(ctx: ExtensionContext, config: BannerConfig): Promise<
 			commands: safeCommands(),
 			settings: safeSettings(),
 			model: ctx.model,
-			activeTheme: safeSettings().theme,
-			availableThemes: ctx.ui.getAllThemes().map((theme) => theme.name),
+			thinking: ctx.thinkingLevel,
 			ownCommandName: "splash",
 		});
 	} catch {
@@ -108,18 +107,24 @@ export async function bootstrap(pi: ExtensionAPI, ctx: ExtensionContext): Promis
 	return current;
 }
 
+/**
+ * Re-collect the panel data. `extra` carries values from an event that pi has
+ * not committed to `ctx` yet (`model_select`, `thinking_level_select`), so the
+ * card updates in the same tick the change happens.
+ */
 export async function refreshResources(ctx: ExtensionContext, current: SessionState, extra?: {
 	contextFiles?: string[];
 	skills?: string[];
+	model?: ExtensionContext["model"];
+	thinking?: string;
 }): Promise<void> {
 	try {
 		const next = await collectResources({
 			cwd: ctx.cwd,
 			commands: safeCommands(),
 			settings: safeSettings(),
-			model: ctx.model,
-			activeTheme: safeSettings().theme,
-			availableThemes: ctx.ui.getAllThemes().map((theme) => theme.name),
+			model: extra?.model ?? ctx.model,
+			thinking: extra?.thinking ?? ctx.thinkingLevel,
 			contextFiles: extra?.contextFiles,
 			skills: extra?.skills,
 			ownCommandName: "splash",

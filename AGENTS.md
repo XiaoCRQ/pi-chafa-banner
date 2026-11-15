@@ -47,7 +47,7 @@ src/extension/commands.ts USAGE、SUBCOMMANDS、handleSplashCommand
 src/banner/component.ts   Banner 类：render / invalidate / dispose + 帧定时器
 src/banner/panels.ts      infoRows / sections / 状态行 / 占位卡 / describeConfig
 src/layout/palette.ts     resolvePalette / hexToRgb / rgbTo256 / foregroundCode / paintForeground
-src/layout/box.ts         panel / infoBox / resourcePanel / wrapNames / distributeLines / themePainter
+src/layout/box.ts         panel / infoBox / resourcePanel / wrapNames / stackNames / distributeLines / themePainter
 src/layout/compose.ts     twoColumn / centerBlock / clampLines / compactSplash
 src/layout/metrics.ts     CHROME_ROWS / splashRows / blockWidthFor
 src/text/ansi.ts          ANSI_RE / isImageLine / stripAnsi
@@ -61,7 +61,7 @@ src/pipeline/cache.ts     cacheRoot / cacheFilePath / 原子写 / 单文件删�
 src/config/schema.ts      类型、DEFAULT_FILE、LIMITS、parseSize、palette 常量
 src/config/validate.ts    宽容解析：逐键警告，永不抛
 src/config/load.ts        pluginRoot / configPath / loadConfig / applySourceSize / 测试缝
-src/resources.ts          采集 version/model/theme/context/skills/themes/extensions
+src/resources.ts          采集 version/model/thinking/context/skills/extensions
 src/host.ts               从 pi 组件树里纯内存摘除 loadedResourcesContainer
 ```
 
@@ -81,6 +81,8 @@ src/host.ts               从 pi 组件树里纯内存摘除 loadedResourcesCont
    跨终端可对齐。**不要加 `--clear`**，它的 `ESC[2J/ESC[0H` 必须被 `stripChafaControl()`
    剥掉。用户在 `image.chafa` 里写这三个参数会被 `sanitizeChafaArgs()` 丢弃。
 4. **`render()` 是同步的。** 所有帧必须预渲染并缓存在内存/磁盘，绝不在这里 spawn。
+   异步采集（`collectResources()` 里的 `pi -v`、chafa、ffmpeg）可以 spawn，但结果必须先落进
+   state 再 `requestRender()`，`render()` 只读缓存。
 5. **组件只做三件事：`render` / `invalidate` / `dispose`。** 不实现 `handleInput` /
    `handleMouse`，不抢焦点、不做浮层——splash 必须是文档流里的一行才能随对话滚走。
 6. **定时器必须 `unref()` 且在 `dispose()` 里清掉**，`/splash off`、`session_shutdown`、
@@ -131,9 +133,8 @@ assets/banner.gif（或 image.path）
 | --- | --- | --- |
 | Context | `scanContextFiles()`：`AGENTS.override.md/AGENTS.md/AGENTS.MD/CLAUDE.md/CLAUDE.MD`（cwd 及祖先、agentDir）、`APPEND_SYSTEM.md`（`<cwd>/.pi/`、agentDir） | 无公开 API，只能扫盘 |
 | Skills | `pi.getCommands()` 里 `name` 以 `skill:` 开头；首轮后用 `before_agent_start` 的 `event.systemPromptOptions.skills` 补全 | 首轮前可能不全 |
-| Themes | `ctx.ui.getAllThemes()` | |
-| Extensions | `pi.getCommands()` 的 `source:"extension"` + `settings.extensions` + `settings.packages` + `~/.pi/agent/extensions/*` | 无命令的扩展可能漏 |
-| version/model/theme | pi 包版本探测、`ctx.model.{provider,id}`、`pi.getSettings().theme` | |
+| Extensions | `settings.packages` 的 `npm:` 包（读 `~/.pi/agent/npm/node_modules/<pkg>/package.json` 的 `pi.extensions[0]`，渲染成 `包名:入口`，由 `extensionLabel()` 去掉 `./`/`extensions/`/`index.ts`）+ `settings.extensions` 路径 + `~/.pi/agent/extensions/*`、`<cwd>/.pi/extensions/*` + `pi.getCommands()` 里 `source:"extension"` 的兜底名字 | 同名目录条目会被包名去重；没有命令又没有目录的扩展可能漏 |
+| version/model/thinking | `pi -v`（`getPiVersion()`，每进程只 spawn 一次并缓存，失败退化成 `?.?.?`）、`ctx.model.{name,provider,id}`、`ctx.thinkingLevel`（`model_select` / `thinking_level_select` 事件里用事件值，避免晚一拍） | 信息卡标题是 `CODING AGENT` |
 
 采集整体 `try/catch`，任何一块失败只影响该区块。
 
@@ -160,8 +161,8 @@ assets/banner.gif（或 image.path）
 | --- | --- |
 | image | `path`（`~/Pictures/logo/v-3.gif` → 包内图）、`fps` `"auto"`、`stride` 3、`chafa` `""` |
 | layout | `width` 88、`gap` 2、`twoColumnMinWidth` 76、`compactMinWidth` 32、`maxWidth` 108、`lowerRows` 12 |
-| panels.info | `enabled` true、`fields` `["version","model","theme"]`（可选 `gif`/`frames`） |
-| panels.resources | `enabled` true、`sections` 全部、`maxLinesPerSection` 6（`width`/`height` 仅堆叠时用） |
+| panels.info | `enabled` true、`fields` `["version","model"]`（可选 `gif`/`frames`；每项渲染成一行 `[Version] 1.5.2`，标签用 `sectionTitle` 色，高度随字段数增长；思考强度不是字段，而是 model 行的 `suffix`：`[Model] Claude Sonnet 4.5 · high`，`InfoRow.suffix` 自带宽度预算，值被截断时尾缀仍在） |
+| panels.resources | `enabled` true、`sections` 默认 `["context","skills","extensions"]`（已去掉 Themes）、`maxLinesPerSection` 6（`width`/`height` 仅堆叠时用）。Context/Skills 用 `wrapNames()` 逗号换行，Extensions 标 `stacked: true` 走 `stackNames()` 一行一个，行数不够时末行变 `  ...` |
 | theme | `preset` `"tokyonight"`（默认，`#7aa2f7`/`#bb9af7`/`#3b4261`/`#a9b1d6`）、`windowTitle`/`sectionTitle`/`border`/`content` 默认空（取预设）；`preset` 写 `"pi"` 改为跟随 pi 主题 token |
 | behavior | `enabled` true、`static` false、`hidePiResourceList` true |
 

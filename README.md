@@ -8,7 +8,7 @@ never touches a keystroke.
 
 ![pi-chafa-banner inside pi: the chafa-rendered gif at the top left, the coding-agent card below it, the resources panel on the right](https://raw.githubusercontent.com/XiaoCRQ/pi-chafa-banner/main/assets/preview.png)
 
-<sub>A real session: gif on the left, <code>(pi) CODING AGENT</code> below it, resources on the right — tokyonight palette.</sub>
+<sub>A real session: gif on the left, <code>CODING AGENT</code> below it, resources on the right — tokyonight palette.</sub>
 
 ## Quick start
 
@@ -68,7 +68,7 @@ ignored.
     "chafa": "--symbols block"
   },
   "layout": { "width": 88, "gap": 2 },
-  "panels": { "info": { "fields": ["version", "model", "theme"] } },
+  "panels": { "info": { "fields": ["version", "model"] } },
   "theme": { "preset": "tokyonight" }
 }
 ```
@@ -80,9 +80,9 @@ ignored.
 | `image.chafa` | `""` | Extra chafa flags, one string, e.g. `"--symbols block -c 16"` |
 | `layout.width` / `layout.gap` | `88` / `2` | Overall width; the two columns split it evenly and the art canvas follows |
 | `layout.twoColumnMinWidth` / `compactMinWidth` | `76` / `32` | Below these the panels stack, then collapse into three lines |
-| `panels.info.enabled` / `.fields` | `true` / version, model, theme | Also `gif`, `frames` |
-| `panels.resources.enabled` / `.sections` | `true` / all four | `context`, `skills`, `themes`, `extensions` |
-| `panels.resources.maxLinesPerSection` | `6` | Lines per section before it trails off with `…` |
+| `panels.info.enabled` / `.fields` | `true` / version, model | `version` is pi's version (from `pi -v`); the current thinking level trails the model as `· high`; also `gif`, `frames` |
+| `panels.resources.enabled` / `.sections` | `true` / all three | `context`, `skills`, `extensions` |
+| `panels.resources.maxLinesPerSection` | `6` | Lines per section before it trails off (`…` on a truncated name, `...` when Extensions has more rows) |
 | `panels.resources.width` / `.height` | `"auto"` / `"auto"` | Ignored side-by-side: the panel is exactly as wide as the art column |
 | `theme.preset` | `"tokyonight"` | Pins the dark palette below; `pi` follows pi's active theme instead |
 | `theme.windowTitle` / `.sectionTitle` / `.border` / `.content` | preset | Four colour roles, any `#rgb` / `#rrggbb` — see below |
@@ -115,8 +115,8 @@ colour either way:
 
 | Role | What it paints | `tokyonight` |
 | --- | --- | --- |
-| `windowTitle` | Box titles: `RESOURCES`, `(pi) CODING AGENT`, `IMAGE` | `#7aa2f7` blue |
-| `sectionTitle` | `[Context]`, `[Skills]`, `[Themes]`, `[Extensions]` | `#bb9af7` purple |
+| `windowTitle` | Box titles: `RESOURCES`, `CODING AGENT`, `IMAGE` | `#7aa2f7` blue |
+| `sectionTitle` | `[Context]`, `[Skills]`, `[Extensions]`, `[Version]`, `[Model]` | `#bb9af7` purple |
 | `border` | Box edges, and the dashes either side of a title | `#3b4261` comment |
 | `content` | Info values, resource names, the status line | `#a9b1d6` foreground |
 

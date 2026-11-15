@@ -12,10 +12,10 @@ export interface BannerSize {
 }
 
 /** Which facts the info card may show. */
-export type PanelField = "version" | "model" | "theme" | "gif" | "frames";
+export type PanelField = "version" | "model" | "gif" | "frames";
 
 /** Which blocks the RESOURCES panel may show, in file order. */
-export type ResourceSectionId = "context" | "skills" | "themes" | "extensions";
+export type ResourceSectionId = "context" | "skills" | "extensions";
 
 export type AutoSize = number | "auto";
 
@@ -41,9 +41,9 @@ export type ThemeRole = "windowTitle" | "sectionTitle" | "border" | "content";
  */
 export interface ThemeSettings {
 	preset: ThemePreset;
-	/** Box titles: `RESOURCES`, `(pi) CODING AGENT`, `IMAGE`. */
+	/** Box titles: `RESOURCES`, `CODING AGENT`, `IMAGE`. */
 	windowTitle?: string;
-	/** Section headings: `[Context]`, `[Skills]`, … */
+	/** Section headings: `[Context]`, `[Skills]`, and the info card's `[Version]` / `[Model]`. */
 	sectionTitle?: string;
 	/** Box borders and the dashes either side of a title. */
 	border?: string;
@@ -135,10 +135,10 @@ export const DEFAULT_FILE = {
 	},
 	layout: { width: 88, gap: 2, twoColumnMinWidth: 76, compactMinWidth: 32, maxWidth: 108, lowerRows: 12 },
 	panels: {
-		info: { enabled: true, fields: ["version", "model", "theme"] },
+		info: { enabled: true, fields: ["version", "model"] },
 		resources: {
 			enabled: true,
-			sections: ["context", "skills", "themes", "extensions"],
+			sections: ["context", "skills", "extensions"],
 			width: "auto",
 			height: "auto",
 			maxLinesPerSection: 6,
@@ -177,8 +177,8 @@ export const LIMITS = {
 	panelWidth: { min: 16, max: 200 },
 } as const;
 
-export const PANEL_FIELDS: readonly PanelField[] = ["version", "model", "theme", "gif", "frames"];
-export const RESOURCE_SECTIONS: readonly ResourceSectionId[] = ["context", "skills", "themes", "extensions"];
+export const PANEL_FIELDS: readonly PanelField[] = ["version", "model", "gif", "frames"];
+export const RESOURCE_SECTIONS: readonly ResourceSectionId[] = ["context", "skills", "extensions"];
 
 export function clamp(value: number, min: number, max: number): number {
 	if (!Number.isFinite(value)) return min;

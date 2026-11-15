@@ -7,7 +7,7 @@
 
 ![pi-chafa-banner 在 pi 里的样子：左上 chafa 字符画，下面是信息卡，右侧资源面板](https://raw.githubusercontent.com/XiaoCRQ/pi-chafa-banner/main/assets/preview.png)
 
-<sub>真机截图：左边字符画、下面 <code>(pi) CODING AGENT</code>、右侧资源面板——示例用的是 tokyonight 配色。</sub>
+<sub>真机截图：左边字符画、下面 <code>CODING AGENT</code>、右侧资源面板——示例用的是 tokyonight 配色。</sub>
 
 ## 快速开始
 
@@ -66,7 +66,7 @@ bun run scripts/preview.ts --static --theme pi             # 跟随 pi 主题 to
     "chafa": "--symbols block"
   },
   "layout": { "width": 88, "gap": 2 },
-  "panels": { "info": { "fields": ["version", "model", "theme"] } },
+  "panels": { "info": { "fields": ["version", "model"] } },
   "theme": { "preset": "tokyonight" }
 }
 ```
@@ -78,9 +78,9 @@ bun run scripts/preview.ts --static --theme pi             # 跟随 pi 主题 to
 | `image.chafa` | `""` | 额外的 chafa 参数，一个字符串，比如 `"--symbols block -c 16"` |
 | `layout.width` / `layout.gap` | `88` / `2` | 整体宽度；两列等分，字符画尺寸跟着推导，不用单独配 |
 | `layout.twoColumnMinWidth` / `compactMinWidth` | `76` / `32` | 窄于前者改成上下堆叠，窄于后者退化成三行 |
-| `panels.info.enabled` / `.fields` | `true` / version, model, theme | 还能加 `gif`、`frames` |
-| `panels.resources.enabled` / `.sections` | `true` / 四项全开 | `context`、`skills`、`themes`、`extensions` |
-| `panels.resources.maxLinesPerSection` | `6` | 每个分类最多几行，超出用 `…` 收尾 |
+| `panels.info.enabled` / `.fields` | `true` / version、model | `version` 是 pi 自身的版本号（取自 `pi -v`）；当前思考强度跟在 model 后面显示成 `· high`；还能加 `gif`、`frames` |
+| `panels.resources.enabled` / `.sections` | `true` / 三项全开 | `context`、`skills`、`extensions` |
+| `panels.resources.maxLinesPerSection` | `6` | 每个分类最多几行，超出收尾（名字被截断显示 `…`，Extensions 还有更多时最后一行是 `...`） |
 | `panels.resources.width` / `.height` | `"auto"` / `"auto"` | 双栏时忽略：面板宽度恒等于图片列 |
 | `theme.preset` | `"tokyonight"` | 锁定下面的深色配色；写 `pi` 改为跟随 pi 当前主题 |
 | `theme.windowTitle` / `.sectionTitle` / `.border` / `.content` | 取预设 | 四个配色角色，写 `#rgb` 或 `#rrggbb` 即可覆盖——见下节 |
@@ -110,8 +110,8 @@ token，浅色终端该用这个。任一角色还能单独用 hex 覆盖：
 
 | 角色 | 画在哪 | `tokyonight` |
 | --- | --- | --- |
-| `windowTitle` | 窗口标题：`RESOURCES`、`(pi) CODING AGENT`、`IMAGE` | `#7aa2f7` 蓝 |
-| `sectionTitle` | 标签标题：`[Context]`、`[Skills]`、`[Themes]`、`[Extensions]` | `#bb9af7` 紫 |
+| `windowTitle` | 窗口标题：`RESOURCES`、`CODING AGENT`、`IMAGE` | `#7aa2f7` 蓝 |
+| `sectionTitle` | 标签标题：`[Context]`、`[Skills]`、`[Extensions]`、`[Version]`、`[Model]` | `#bb9af7` 紫 |
 | `border` | 窗口边框，以及标题两侧的横线 | `#3b4261` 注释灰 |
 | `content` | 窗口内容：字段值、资源名、状态行 | `#a9b1d6` 正文色 |
 

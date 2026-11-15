@@ -142,6 +142,22 @@ declare module "@earendil-works/pi-coding-agent" {
 		messages: AgentMessage[];
 	}
 
+	/** Mirrors pi-agent-core's ThinkingLevel. */
+	export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
+	export interface ModelSelectEvent {
+		type: "model_select";
+		model: Model;
+		previousModel?: Model;
+		source: string;
+	}
+
+	export interface ThinkingLevelSelectEvent {
+		type: "thinking_level_select";
+		level: ThinkingLevel;
+		previousLevel: ThinkingLevel;
+	}
+
 	export interface BeforeAgentStartEventBase {
 		type: "before_agent_start";
 		readonly systemPrompt: string;
@@ -170,6 +186,8 @@ declare module "@earendil-works/pi-coding-agent" {
 		hasUI: boolean;
 		cwd: string;
 		model: Model | undefined;
+		/** Current reasoning effort; absent on older pi builds. */
+		thinkingLevel?: ThinkingLevel;
 		isIdle(): boolean;
 		signal: AbortSignal | undefined;
 		[key: string]: unknown;
@@ -197,6 +215,8 @@ declare module "@earendil-works/pi-coding-agent" {
 		on(event: "agent_start", handler: ExtensionHandler<AgentStartEvent>): () => void;
 		on(event: "agent_end", handler: ExtensionHandler<AgentEndEvent>): () => void;
 		on(event: "before_agent_start", handler: ExtensionHandler<BeforeAgentStartEvent>): () => void;
+		on(event: "model_select", handler: ExtensionHandler<ModelSelectEvent>): () => void;
+		on(event: "thinking_level_select", handler: ExtensionHandler<ThinkingLevelSelectEvent>): () => void;
 		on(event: string, handler: ExtensionHandler<unknown, unknown>): () => void;
 
 		registerCommand(name: string, options: Omit<RegisteredCommand, "name" | "sourceInfo">): void;

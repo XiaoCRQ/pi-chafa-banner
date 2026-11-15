@@ -284,11 +284,10 @@ function stubResources(): BannerResources {
 		...emptyResources(),
 		version: "1.5.2",
 		model: "anthropic/claude-sonnet-4-5",
-		theme: "dark",
+		thinking: "high",
 		context: ["AGENTS.md", "~/.pi/agent/AGENTS.md"],
 		skills: ["btw", "workflow-authoring", "workflow-patterns"],
-		themes: ["dark", "light"],
-		extensions: ["pi-btw", "pi-dynamic-workflows", "pi-chafa-banner"],
+		extensions: ["pi-btw:btw.ts", "pi-dynamic-workflows:workflow.ts", "pi-chafa-banner"],
 	};
 }
 
@@ -300,13 +299,11 @@ async function resolveResources(real: boolean): Promise<BannerResources> {
 			commands: [],
 			settings: {},
 			model: undefined,
-			activeTheme: "dark",
-			availableThemes: [],
+			thinking: "high",
 		});
 		return {
 			...stubResources(),
 			...scanned,
-			version: scanned.version === "?.?.?" ? "1.5.2" : scanned.version,
 			model: scanned.model && scanned.model !== "unknown" ? scanned.model : stubResources().model,
 		};
 	} catch {

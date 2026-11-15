@@ -63,11 +63,10 @@ function resources(): BannerResources {
 		...emptyResources(),
 		version: "1.5.2",
 		model: "anthropic/claude-sonnet-4-5",
-		theme: "dark",
+		thinking: "high",
 		context: ["AGENTS.md", "~/.pi/agent/AGENTS.md"],
 		skills: ["btw", "workflow-authoring", "workflow-patterns"],
-		themes: ["dark", "light"],
-		extensions: ["pi-btw", "pi-dynamic-workflows", "pi-chafa-banner"],
+		extensions: ["pi-btw:btw.ts", "pi-dynamic-workflows:workflow.ts", "pi-chafa-banner"],
 	};
 }
 
@@ -130,7 +129,7 @@ describe("responsive layout", () => {
 	test("narrow width (60) stacks the resources panel below the info card", () => {
 		const banner = makeBanner();
 		const lines = banner.render(60).map(stripAnsi);
-		const infoIndex = lines.findIndex((line) => line.includes("(pi) CODING AGENT"));
+		const infoIndex = lines.findIndex((line) => line.includes("CODING AGENT"));
 		const resourcesIndex = lines.findIndex((line) => line.includes("RESOURCES"));
 		expect(infoIndex).toBeGreaterThan(0);
 		expect(resourcesIndex).toBeGreaterThan(infoIndex);
@@ -145,10 +144,10 @@ describe("responsive layout", () => {
 		// Left column: artwork, blank line, info card. Right column: the resource
 		// panel, top-aligned with the artwork.
 		const resourcesIndex = lines.findIndex((line) => line.includes("RESOURCES"));
-		const infoIndex = lines.findIndex((line) => line.includes("(pi) CODING AGENT"));
+		const infoIndex = lines.findIndex((line) => line.includes("CODING AGENT"));
 		expect(resourcesIndex).toBe(0);
 		expect(infoIndex).toBeGreaterThan(0);
-		expect(lines[0]).not.toContain("(pi) CODING AGENT");
+		expect(lines[0]).not.toContain("CODING AGENT");
 
 		// The two boxes are side by side and share a baseline: both close on the
 		// last row of the block.
@@ -183,13 +182,13 @@ describe("box titles", () => {
 
 	test("the info card title is centered too", () => {
 		const banner = makeBanner();
-		const top = banner.render(100).map(stripAnsi).find((line) => line.includes("(pi) CODING AGENT"));
+		const top = banner.render(100).map(stripAnsi).find((line) => line.includes("CODING AGENT"));
 		expect(top).toBeDefined();
-		const at = top!.indexOf(" (pi) CODING AGENT ");
+		const at = top!.indexOf(" CODING AGENT ");
 		const leftDashes = at - top!.indexOf("╭") - 1;
 		// The info card shares its row with the RESOURCES box, so stop at its own
 		// top-right corner rather than the last one on the line.
-		const rightDashes = top!.indexOf("╮", at) - (at + " (pi) CODING AGENT ".length);
+		const rightDashes = top!.indexOf("╮", at) - (at + " CODING AGENT ".length);
 		expect(Math.abs(leftDashes - rightDashes)).toBeLessThanOrEqual(1);
 		banner.dispose();
 	});

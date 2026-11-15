@@ -3,10 +3,11 @@
  *
  * Sources, in order of reliability:
  *   - pi.getCommands()  -> skills ("skill:<name>") and extensions
- *   - pi.getSettings()  -> configured packages / extension paths / theme list
+ *   - pi.getSettings()  -> configured packages / extension paths
  *   - before_agent_start event -> already-loaded context files and skills
- *   - filesystem        -> AGENTS.md / CLAUDE.md / APPEND_SYSTEM.md, theme and
- *                          extension directories (in case nothing was loaded yet)
+ *   - filesystem        -> AGENTS.md / CLAUDE.md / APPEND_SYSTEM.md, extension
+ *                          directories and `npm:` manifests (in case nothing
+ *                          was loaded yet)
  *
  * This module never throws: a broken settings file or unreadable directory just
  * means a shorter list.
@@ -15,17 +16,17 @@
 import { existsSync, readFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import type { Settings, SlashCommandInfo } from "@earendil-works/pi-coding-agent";
 import { piAgentDir } from "./config.ts";
+import { run } from "./pipeline/process.ts";
 
 export interface BannerResources {
 	version: string;
 	model: string;
-	theme: string;
+	thinking: string;
 	context: string[];
 	skills: string[];
-	themes: string[];
 	extensions: string[];
 }
 
@@ -35,8 +36,8 @@ export interface ResourceInput {
 	settings?: Settings;
 	agentDir?: string;
 	model?: { id: string; provider: string; name?: string };
-	activeTheme?: string;
-	availableThemes?: readonly string[];
+	/** pi's current thinking level (`ctx.thinkingLevel` / `thinking_level_select`). */
+	thinking?: string;
 	/** Paths from `before_agent_start` (systemPromptOptions.contextFiles[].path). */
 	contextFiles?: readonly string[];
 	/** Names from `before_agent_start` (systemPromptOptions.skills[].name). */
@@ -50,44 +51,32 @@ const CONTEXT_NAMES = ["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.m
 const CONTEXT_SCAN_DEPTH = 6;
 
 export function emptyResources(): BannerResources {
-	return { version: "?.?.?", model: "unknown", theme: "default", context: [], skills: [], themes: [], extensions: [] };
+	return { version: "?.?.?", model: "unknown", thinking: "unknown", context: [], skills: [], extensions: [] };
 }
 
 // ---------------------------------------------------------------------------
 // pi version
 // ---------------------------------------------------------------------------
 
-let cachedVersion: string | undefined;
+/** `pi -v` is spawned once per process; every refresh reuses the result. */
+let piVersion: Promise<string> | undefined;
 
 /**
- * Locate pi's own package.json by walking up from the running entry point.
- * Avoids a static import of the host package so this module also loads in plain
- * bun (tests/preview), where the host alias does not exist.
+ * The host's version, asked straight from `pi -v` (~150ms, cached). Spawning is
+ * safe here: resource collection is async and never runs inside `render()`.
+ * Any failure degrades to `?.?.?` instead of breaking the panel.
  */
-export function getPiVersion(env: NodeJS.ProcessEnv = process.env): string {
-	if (cachedVersion) return cachedVersion;
-	const starts = [process.argv[1], env.PI_PACKAGE_DIR].filter((value): value is string => Boolean(value));
-	for (const start of starts) {
-		let dir = isAbsolute(start) ? start : resolve(start);
-		for (let depth = 0; depth < 8; depth++) {
-			dir = dirname(dir);
-			try {
-				const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as {
-					name?: string;
-					version?: string;
-				};
-				if (manifest.name === "@earendil-works/pi-coding-agent" && manifest.version) {
-					cachedVersion = manifest.version;
-					return cachedVersion;
-				}
-			} catch {
-				// no package.json here; keep walking
-			}
-			if (dirname(dir) === dir) break;
-		}
-	}
-	cachedVersion = "?.?.?";
-	return cachedVersion;
+export function getPiVersion(): Promise<string> {
+	piVersion ??= run("pi", ["-v"], 4_000)
+		.then(({ stdout }) => parsePiVersion(stdout))
+		.catch(() => "?.?.?");
+	return piVersion;
+}
+
+/** First `x.y.z` (prerelease suffix kept) in `pi -v` output; else `?.?.?`. */
+export function parsePiVersion(stdout: string): string {
+	const match = /\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.]+)?/.exec(stdout);
+	return match?.[0] ?? "?.?.?";
 }
 
 // ---------------------------------------------------------------------------
@@ -117,6 +106,81 @@ export function shortExtensionLabel(raw: string): string {
 	}
 	if (parts[0]!.startsWith("@") && parts.length > 1) return `${parts[0]}/${parts[1]}`;
 	return parts[0]!;
+}
+
+/** `npm:@scope/pkg@1.2.3` -> `@scope/pkg`; anything that is not an npm spec -> undefined. */
+export function packageNameFromSpec(spec: string): string | undefined {
+	const trimmed = spec.trim();
+	if (!/^npm:/i.test(trimmed)) return undefined;
+	const rest = trimmed.slice(4).trim();
+	if (!rest) return undefined;
+	const at = rest.lastIndexOf("@");
+	const name = (at > 0 ? rest.slice(0, at) : rest).trim();
+	return name || undefined;
+}
+
+/** `@scope/pkg` -> `pkg`, `pi-btw` -> `btw`: the human short name of a package. */
+export function packageShortName(name: string): string {
+	const base = name.startsWith("@") ? (name.split("/")[1] ?? name) : name;
+	const stripped = base.replace(/^pi-/, "");
+	return stripped || base;
+}
+
+/**
+ * Strip what carries no information once the package name is already printed:
+ * `./`, a leading `extensions/`, a trailing `index.ts` / `main.js`, slashes.
+ * `./src/index.ts` -> `src`, `./extensions/btw.ts` -> `btw.ts`.
+ */
+export function extensionEntrySuffix(entry: string): string {
+	let value = entry
+		.trim()
+		.replace(/^\.\/?/, "")
+		.replace(/\/+$/, "");
+	if (!value) return "";
+	value = value.replace(/^extensions(?:\/|$)/i, "").replace(/\/+$/, "");
+	value = value.replace(/(?:^|\/)(?:index|main)\.(?:[cm]?[jt]s)$/i, "");
+	return value.replace(/\/+$/, "");
+}
+
+/**
+ * `pi-btw` + `./extensions/btw.ts` -> `pi-btw:btw.ts`. Entries at the package
+ * root (`./`, `./index.ts`) need no suffix at all; a bare `./extensions`
+ * degrades to the short package name.
+ */
+export function extensionLabel(name: string, entry: string): string {
+	const cleaned = entry
+		.trim()
+		.replace(/^\.\/?/, "")
+		.replace(/\/+$/, "");
+	if (!cleaned) return name;
+	if (/^extensions$/i.test(cleaned)) return `${name}:${packageShortName(name)}`;
+	const suffix = extensionEntrySuffix(cleaned);
+	return suffix ? `${name}:${suffix}` : name;
+}
+
+interface PackageManifest {
+	name?: string;
+	pi?: { extensions?: unknown };
+}
+
+function readManifest(file: string): PackageManifest | undefined {
+	try {
+		return JSON.parse(readFileSync(file, "utf8")) as PackageManifest;
+	} catch {
+		return undefined;
+	}
+}
+
+/** First `pi.extensions` entry of an installed package, if any. */
+function manifestEntry(manifest: PackageManifest | undefined): string | undefined {
+	const list = manifest?.pi?.extensions;
+	if (!Array.isArray(list)) return undefined;
+	return list.find((value): value is string => typeof value === "string");
+}
+
+/** Where pi unpacks `npm:` packages: user scope first, then project scope. */
+function packageRoots(agentDir: string, cwd: string): string[] {
+	return [join(agentDir, "npm", "node_modules"), join(cwd, ".pi", "npm", "node_modules")];
 }
 
 function uniqueSorted(values: Iterable<string>): string[] {
@@ -181,12 +245,6 @@ async function scanSkillDir(dir: string): Promise<string[]> {
 	return (await listDirNames(dir)).filter((name) => !name.startsWith(".") && existsSync(join(dir, name, "SKILL.md")));
 }
 
-async function scanThemes(dir: string): Promise<string[]> {
-	return (await listDirNames(dir))
-		.filter((name) => /\.json$/i.test(name) && !name.startsWith("."))
-		.map((name) => name.replace(/\.json$/i, ""));
-}
-
 // ---------------------------------------------------------------------------
 // collector
 // ---------------------------------------------------------------------------
@@ -215,45 +273,71 @@ export async function collectResources(input: ResourceInput): Promise<BannerReso
 			...(await scanSkillDir(join(agentDir, "skills"))),
 		];
 
-		const extensionLabels: string[] = [
-			...fromCommands(commands, "extension").filter((name) => name !== own),
-			...(settings.extensions ?? []).map(shortExtensionLabel),
-		];
+		const extensionLabels: string[] = [];
+		const roots = packageRoots(agentDir, cwd);
+
+		// `npm:` packages carry their entry point in `pi.extensions`; show it as
+		// `pkg:entry` so the panel says what actually got loaded. The same plugin
+		// often also has a directory under `extensions/`, so remember the package
+		// names and skip the duplicate directory entry below.
+		const packageKeys = new Set<string>();
 		for (const pkg of settings.packages ?? []) {
-			if (typeof pkg === "string") {
-				extensionLabels.push(shortExtensionLabel(pkg));
+			const spec = typeof pkg === "string" ? pkg : pkg?.source;
+			if (!spec) continue;
+			const name = packageNameFromSpec(spec);
+			if (!name) {
+				extensionLabels.push(shortExtensionLabel(spec));
 				continue;
 			}
-			if (pkg?.source) extensionLabels.push(shortExtensionLabel(pkg.source));
+			const entry = roots.map((root) => manifestEntry(readManifest(join(root, name, "package.json")))).find(
+				(value) => value !== undefined,
+			);
+			packageKeys.add(name.toLowerCase());
+			packageKeys.add(packageShortName(name).toLowerCase());
+			packageKeys.add((name.split("/").pop() ?? name).toLowerCase());
+			extensionLabels.push(entry === undefined ? name : extensionLabel(name, entry));
 		}
+
 		for (const dir of [join(agentDir, "extensions"), join(cwd, ".pi", "extensions")]) {
 			for (const name of await listDirNames(dir)) {
-				if (name.startsWith(".")) continue;
-				extensionLabels.push(shortExtensionLabel(name));
+				if (name.startsWith(".") || packageKeys.has(name.toLowerCase())) continue;
+				const manifest = readManifest(join(dir, name, "package.json"));
+				const entry = manifestEntry(manifest);
+				const pkgName = manifest?.name ?? name;
+				extensionLabels.push(entry === undefined ? shortExtensionLabel(name) : extensionLabel(pkgName, entry));
 			}
 		}
 
-		const themeNames = [
-			...(input.availableThemes ?? []),
-			...(settings.themes ?? []).map(shortExtensionLabel),
-			...(await scanThemes(join(agentDir, "themes"))),
-			...(await scanThemes(join(cwd, ".pi", "themes"))),
-		];
+		for (const raw of settings.extensions ?? []) extensionLabels.push(shortExtensionLabel(raw));
 
-		const activeTheme = input.activeTheme ?? settings.theme ?? "default";
+		// Command names are the fallback for extensions that are neither a
+		// configured package nor a directory; `btw:ask` belongs to `pi-btw:btw.ts`.
+		const covered = new Set<string>();
+		for (const label of extensionLabels) {
+			const head = label.split(":")[0] ?? "";
+			covered.add(head.toLowerCase());
+			covered.add(packageShortName(head).toLowerCase());
+		}
+		for (const name of fromCommands(commands, "extension")) {
+			const base = name.split(":")[0] ?? name;
+			if (base === own || covered.has(base.toLowerCase())) continue;
+			extensionLabels.push(name);
+		}
+
+		// The human name when pi knows one, the canonical `provider/id` otherwise:
+		// the info card appends the thinking level after it, so the model string
+		// has to stay short enough to leave that suffix room.
 		const model = input.model
-			? input.model.name && input.model.name !== input.model.id
-				? `${input.model.name} · ${input.model.provider}/${input.model.id}`
-				: `${input.model.provider}/${input.model.id}`
+			? input.model.name?.trim() || `${input.model.provider}/${input.model.id}`
 			: "unknown";
+		const thinking = (input.thinking ?? "").trim().toLowerCase() || "unknown";
 
 		return {
-			version: getPiVersion(),
+			version: await getPiVersion(),
 			model,
-			theme: activeTheme,
+			thinking,
 			context: uniqueSorted([...scanContextFiles(cwd, agentDir), ...(input.contextFiles ?? [])]),
 			skills: uniqueSorted(skills),
-			themes: uniqueSorted(themeNames),
 			extensions: uniqueSorted(extensionLabels),
 		};
 	} catch {

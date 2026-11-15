@@ -153,7 +153,6 @@ describe("themePainter", () => {
 		infoBox("T", [{ label: "model", value: "x" }], 24, painter);
 		expect(seen).toContain("borderMuted");
 		expect(seen).toContain("mdHeading");
-		expect(seen).toContain("muted");
 		expect(seen).toContain("text");
 	});
 

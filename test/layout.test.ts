@@ -9,6 +9,7 @@ import {
 	plainPainter,
 	resourcePanel,
 	resourceSection,
+	stackNames,
 	themePainter,
 	THIN_BOX,
 	twoColumn,
@@ -85,28 +86,39 @@ describe("panel", () => {
 });
 
 describe("infoBox", () => {
-	test("aligns labels and values into columns", () => {
+	test("draws one `[Label] value` line per fact", () => {
 		const lines = infoBox(
-			"(pi) CODING AGENT",
+			"CODING AGENT",
 			[
-				{ label: "version", value: "1.5.2" },
-				{ label: "model", value: "claude-sonnet-4-5" },
-				{ label: "theme", value: "dark" },
+				{ label: "Version", value: "1.5.2" },
+				{ label: "Model", value: "Claude Sonnet 4.5", suffix: "· high" },
 			],
 			40,
 			plainPainter,
 		);
-		expect(lines.length).toBe(5);
-		// Labels are padded to the longest one ("version"), then two spaces.
-		expect(lines[1]!.startsWith("│ version  1.5.2")).toBe(true);
-		expect(lines[2]!.startsWith("│ model    claude-sonnet-4-5")).toBe(true);
-		expect(lines[3]!.startsWith("│ theme    dark")).toBe(true);
+		expect(lines.length).toBe(4);
+		// Bracketed labels reuse the `[Context]` heading style of RESOURCES, so
+		// every fact fits on a single line with no column padding.
+		expect(lines[1]!.startsWith("│ [Version] 1.5.2")).toBe(true);
+		expect(lines[2]!.startsWith("│ [Model] Claude Sonnet 4.5 · high")).toBe(true);
 		expect(widths(lines).every((width) => width === 40)).toBe(true);
 	});
 
 	test("truncates long values to fit", () => {
-		const lines = infoBox("T", [{ label: "model", value: "x".repeat(200) }], 24, plainPainter);
+		const lines = infoBox("T", [{ label: "Model", value: "x".repeat(200) }], 24, plainPainter);
 		expect(widths(lines).every((width) => width === 24)).toBe(true);
+	});
+
+	test("keeps a suffix on the card when the value has to truncate", () => {
+		const lines = infoBox("T", [{ label: "Model", value: "x".repeat(200), suffix: "· high" }], 30, plainPainter);
+		expect(widths(lines).every((width) => width === 30)).toBe(true);
+		expect(lines[1]!.includes("· high")).toBe(true);
+		expect(lines[1]!.includes("…")).toBe(true);
+	});
+
+	test("keeps the value readable when the label eats the width", () => {
+		const lines = infoBox("T", [{ label: "Thinking", value: "medium" }], 14, plainPainter);
+		expect(widths(lines).every((width) => width === 14)).toBe(true);
 	});
 });
 
@@ -131,6 +143,32 @@ describe("wrapNames", () => {
 	});
 });
 
+describe("stackNames", () => {
+	test("puts one name per line with a two-space indent", () => {
+		expect(stackNames(["a", "b"], 20)).toEqual(["  a", "  b"]);
+	});
+
+	test("collapses the tail to ... when the rows run out", () => {
+		const names = Array.from({ length: 10 }, (_, index) => `ext-${index}`);
+		expect(stackNames(names, 24, 4)).toEqual(["  ext-0", "  ext-1", "  ext-2", "  ..."]);
+	});
+
+	test("a single row keeps the first name plus `, ...`", () => {
+		const lines = stackNames(["@scope/pkg:dist", "other"], 24, 1);
+		expect(lines.length).toBe(1);
+		expect(lines[0]!.startsWith("  @scope/pkg")).toBe(true);
+		expect(lines[0]!.endsWith(", ...")).toBe(true);
+		expect(visibleWidth(lines[0]!)).toBeLessThanOrEqual(24);
+	});
+
+	test("truncates a single long name to the width", () => {
+		const lines = stackNames(["x".repeat(60)], 20);
+		expect(lines.length).toBe(1);
+		expect(lines[0]!.includes("…")).toBe(true);
+		expect(visibleWidth(lines[0]!)).toBeLessThanOrEqual(20);
+	});
+});
+
 describe("distributeLines", () => {
 	test("gives every list one line first", () => {
 		expect(distributeLines([1, 1, 1], 10)).toEqual([1, 1, 1]);
@@ -152,6 +190,16 @@ describe("resourceSection / resourcePanel", () => {
 	test("renders an empty section placeholder", () => {
 		const lines = resourceSection("Skills", [], 20, plainPainter);
 		expect(lines).toEqual(["[Skills]", "  (none)"]);
+	});
+
+	test("stacked sections draw one extension per row", () => {
+		const lines = resourceSection("Extensions", ["pi-btw:btw.ts", "pi-chafa-banner"], 30, plainPainter, Infinity, true);
+		expect(lines).toEqual(["[Extensions]", "  pi-btw:btw.ts", "  pi-chafa-banner"]);
+	});
+
+	test("a stacked section budgeted to two rows ends with ...", () => {
+		const lines = resourceSection("Extensions", ["a:1", "b:2", "c:3"], 30, plainPainter, 2, true);
+		expect(lines).toEqual(["[Extensions]", "  a:1", "  ..."]);
 	});
 
 	test("panel lines never exceed the width and the box is exact", () => {
@@ -221,7 +269,7 @@ describe("twoColumn / centering", () => {
 
 describe("compactSplash", () => {
 	test("returns three narrow lines", () => {
-		const lines = compactSplash(28, plainPainter, { version: "1.5.2", model: "claude", theme: "dark" });
+		const lines = compactSplash(28, plainPainter, { version: "1.5.2", model: "claude", thinking: "high" });
 		expect(lines.length).toBe(3);
 		for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(28);
 		expect(lines[0]).toContain("1.5.2");

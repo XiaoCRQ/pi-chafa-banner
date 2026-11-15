@@ -8,25 +8,45 @@
 
 import { formatSize, type BannerConfig, type PanelField, type ResourceSectionId } from "../config.ts";
 import type { FrameSet } from "../frames.ts";
-import { panel, type Painter, type ResourceSection } from "../layout.ts";
+import { panel, type InfoRow, type Painter, type ResourceSection } from "../layout.ts";
 import { truncateToWidth } from "../text.ts";
 
 import type { BannerResources } from "../resources.ts";
+
+/**
+ * The thinking level rides along as the model row's suffix instead of getting a
+ * `[Thinking]` line of its own: it is one short word, and a suffix keeps its
+ * budget when the model name is long enough to truncate.
+ */
+function thinkingSuffix(resources: BannerResources): string | undefined {
+	return resources.thinking === "unknown" ? undefined : `· ${resources.thinking}`;
+}
 
 /** Facts shown in the coding-agent box, in `panels.info.fields` order. */
 export function infoRows(
 	config: BannerConfig,
 	resources: BannerResources,
 	frames: FrameSet | undefined,
-): Array<{ label: string; value: string }> {
+): InfoRow[] {
 	const values: Record<PanelField, string> = {
 		version: resources.version,
 		model: resources.model,
-		theme: resources.theme,
 		gif: config.gifPath ?? "(bundled)",
 		frames: frames ? `${frames.frames.length}/${frames.totalFrames}` : "pending",
 	};
-	return config.panels.info.fields.map((field) => ({ label: field, value: values[field] ?? "" }));
+	// Labels are capitalised because each one is rendered as a `[Label]`
+	// heading, matching the `[Context]` / `[Skills]` style of RESOURCES.
+	return config.panels.info.fields.map((field) => {
+		const row: InfoRow = {
+			label: field.charAt(0).toUpperCase() + field.slice(1),
+			value: values[field] ?? "",
+		};
+		if (field === "model") {
+			const suffix = thinkingSuffix(resources);
+			if (suffix) row.suffix = suffix;
+		}
+		return row;
+	});
 }
 
 /** Resource groups the RESOURCES box lists, in `panels.resources.sections` order. */
@@ -34,8 +54,9 @@ export function sections(config: BannerConfig, resources: BannerResources): Reso
 	const all: Record<ResourceSectionId, ResourceSection> = {
 		context: { title: "Context", names: resources.context },
 		skills: { title: "Skills", names: resources.skills },
-		themes: { title: "Themes", names: resources.themes },
-		extensions: { title: "Extensions", names: resources.extensions },
+		// Extensions get one row each: `pkg:entry` labels are too similar to
+		// comma-wrap without becoming a wall of text.
+		extensions: { title: "Extensions", names: resources.extensions, stacked: true },
 	};
 	return config.panels.resources.sections.map((id) => all[id]).filter(Boolean);
 }
