@@ -139,24 +139,24 @@ describe("responsive layout", () => {
 		banner.dispose();
 	});
 
-	test("wide width (100) stacks the art band above two equal panels", () => {
+	test("wide width (100) puts the art above the info card and RESOURCES beside it", () => {
 		const banner = makeBanner();
 		const lines = banner.render(100).map(stripAnsi);
-		// Both renderers share one shape: the art owns the whole band, the panels
-		// sit below it and are separated by a vertical divider in the mid column.
-		expect(lines[0]).not.toContain("RESOURCES");
+		// Left column: artwork, blank line, info card. Right column: the resource
+		// panel, top-aligned with the artwork.
 		const resourcesIndex = lines.findIndex((line) => line.includes("RESOURCES"));
 		const infoIndex = lines.findIndex((line) => line.includes("(pi) CODING AGENT"));
+		expect(resourcesIndex).toBe(0);
 		expect(infoIndex).toBeGreaterThan(0);
-		expect(resourcesIndex).toBe(infoIndex);
+		expect(lines[0]).not.toContain("(pi) CODING AGENT");
 
-		const top = lines[infoIndex] as string;
-		const start = top.indexOf("╭");
-		const gap = top.indexOf("╮", start) + 1;
-		const left = top.slice(start, gap);
-		const right = top.slice(top.indexOf("╭", gap));
-		expect(visibleWidth(left)).toBe(visibleWidth(right));
-		expect(top.slice(gap, top.indexOf("╭", gap)).trim()).toBe("");
+		// The two boxes are side by side and share a baseline: both close on the
+		// last row of the block.
+		const resTop = lines[resourcesIndex] as string;
+		const infoTop = lines[infoIndex] as string;
+		expect(resTop.indexOf("╭")).toBeGreaterThan(infoTop.indexOf("╭"));
+		const last = lines[lines.length - 1] as string;
+		expect(last.split("╰")).toHaveLength(3);
 		banner.dispose();
 	});
 

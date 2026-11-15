@@ -12,6 +12,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseChafaArgs } from "../pipeline/args.ts";
 import {
 	DEFAULT_FILE,
 	LIMITS,
@@ -175,15 +176,10 @@ export function loadConfig(options: LoadOptions = {}): BannerConfig {
 		heightAuto,
 		fps: settings.image.fps,
 		stride: settings.image.stride,
-		renderer: settings.image.renderer,
+		chafaArgs: parseChafaArgs(settings.image.chafa),
 		static: settings.static,
 		enabled: settings.enabled,
 		hideResources: settings.hideResources,
-		kittyMode: settings.image.native.mode,
-		palette: settings.image.native.palette,
-		maxPixels: settings.image.native.maxPixels,
-		maxFrames: settings.image.native.maxFrames,
-		animSeconds: settings.image.native.animSeconds,
 		layout,
 		panels,
 		source,
@@ -219,11 +215,11 @@ export function describeConfig(config: BannerConfig): string {
 		`layout=${config.layout.width}`,
 		`fps=${config.fps === "auto" ? "native" : config.fps}`,
 		`stride=${config.stride}`,
-		`renderer=${config.renderer}`,
 		`static=${config.static}`,
-		`kitty=${config.kittyMode}`,
-		`palette=${config.palette}`,
-	].join("  ");
+		config.chafaArgs.length > 0 ? `chafa="${config.chafaArgs.join(" ")}"` : undefined,
+	]
+		.filter((part): part is string => part !== undefined)
+		.join("  ");
 }
 
 export { DEFAULT_FILE };
@@ -249,15 +245,10 @@ export const DEFAULTS: BannerConfig = {
 	heightAuto: DEFAULT_FILE.image.height === "auto",
 	fps: DEFAULT_FILE.image.fps,
 	stride: DEFAULT_FILE.image.stride,
-	renderer: DEFAULT_FILE.image.renderer,
+	chafaArgs: parseChafaArgs(DEFAULT_FILE.image.chafa),
 	static: DEFAULT_FILE.behavior.static,
 	enabled: DEFAULT_FILE.behavior.enabled,
 	hideResources: DEFAULT_FILE.behavior.hidePiResourceList,
-	kittyMode: DEFAULT_FILE.image.native.mode,
-	palette: DEFAULT_FILE.image.native.palette,
-	maxPixels: DEFAULT_FILE.image.native.maxPixels,
-	maxFrames: DEFAULT_FILE.image.native.maxFrames,
-	animSeconds: DEFAULT_FILE.image.native.animSeconds,
 	layout: { ...DEFAULT_FILE.layout },
 	panels: {
 		info: { ...DEFAULT_FILE.panels.info, fields: [...DEFAULT_FILE.panels.info.fields] },

@@ -1,183 +1,214 @@
 # AGENTS.md — pi-chafa-banner
 
-给未来的 agent / 协作者看的项目手册。一句话目标：**把一张 GIF 放进 pi 的启动 header
-（顶部、随对话上滚、不抢输入）：图在上，coding-agent 信息与 resources 双栏在下。**
-普通终端走 chafa 字符画，kitty 类终端走原生图片。
+给未来的 agent / 协作者看的项目手册。目标一句话：**把一张 GIF 用 chafa 渲染成
+字符画，放进 pi 的启动 header —— 左上图片、左下 coding-agent 信息卡、右侧
+resources 面板，随对话上滚，不干扰输入。**
 
-用户文档看 `README.md` / `README.zh-CN.md`；模块划分、数据流、协议细节与上游引用逐项说明
-看 `docs/ARCHITECTURE.md`。本文件只记「怎么做对、哪里容易踩」。
+改代码前先读「硬性不变式」——违反那条会直接破坏 pi 的渲染或用户终端。
 
 ---
 
 ## 1. 30 秒上手
 
 ```bash
-bun install                 # 只有 typescript / @types/bun 两个 dev 依赖
-bunx tsc --noEmit           # 类型检查（必须干净）
-bun test                    # 全部用例必须绿
+cd ~/Work/Program/Project/pi-chafa-banner
 
-bun run scripts/preview.ts --width 100                 # 字符画排版
-bun run scripts/preview.ts --image --width 100         # 图片带排版
-bun run scripts/preview.ts --rows 24 --plain           # 矮终端（图片不裁，面板让位）
-pi -e .                                                # 真机（交互式，人工看）
+bun install                     # 只有 typescript / @types/bun
+bunx tsc --noEmit               # 类型检查（必须干净）
+bun test                        # 全部用例必须绿（不写死数字，看输出）
+
+# 不启动 pi，直接看排版（最快的调参回路）
+bun run scripts/preview.ts --static --width 100
+bun run scripts/preview.ts --width 60            # 堆叠布局
+bun run scripts/preview.ts --static --chafa "--symbols block"
+
+# 真机验证（交互式，需人工看）
+pi -e .                         # 临时加载扩展，不动 settings
+bash scripts/demo.sh --preview  # 同上，打印生效配置后再预览
 ```
 
-**禁止**写自动化脚本去启动交互式 pi（会占住 TTY）。非交互冒烟只能：
+**禁止**为了验证而写自动化脚本去启动交互式 pi（它会一直占住 TTY）。非交互冒烟只能：
 
 ```bash
-pi --list-models --offline -e . | grep -c "Failed to load extension"   # 必须是 0
+pi --list-models --offline -e .
+# 加载失败时 pi 仍返回 0，必须 grep 输出里的 "Failed to load extension"
 ```
 
-加载失败时 pi 仍返回 0，只有 grep 能发现问题。
-
-## 2. 目录（行号会漂，函数名为准）
+## 2. 目录与职责（行号会漂，函数名为准）
 
 ```
-src/index.ts              入口：pi 事件 → controllers，86 行
-src/extension/state.ts    SessionState 持有者、渲染器选择、status 文案
-src/extension/session.ts  bootstrap、后台构建、资源刷新、resize 重建
-src/extension/header.ts   setHeader 接线、pi 资源列表摘除/恢复
-src/extension/commands.ts /splash on|off|freeze|rebuild|reload|status
-src/config/schema.ts      配置形状、默认值、limits、parseSize/paletteOf
-src/config/validate.ts    宽容读取 JSON（缺键→默认，越界→clamp，错误→警告）
-src/config/load.ts        文件发现、gif 解析、auto 高度、loadSessionConfig
-src/banner/component.ts   Banner 组件本体（render/invalidate/dispose）
-src/banner/band.ts        ImageFrameSet → kitty 序列行（WeakMap 记忆）
-src/banner/panels.ts      info 卡、RESOURCES 分组、占位卡（纯函数）
-src/layout/box.ts         主题化盒子、换行、distributeLines
-src/layout/compose.ts     twoColumn / centerBlock / compactSplash
-src/layout/metrics.ts     行列预算、splashRows、parseKittyRows
-src/text/ansi.ts          转义识别、isImageLine、stripAnsi
-src/text/width.ts         visibleWidth/padVisible/centerVisible（pi-tui 对等）
-src/text/truncate.ts      truncateToWidth 等
-src/pipeline/process.ts   无 tty spawn、preflight、gif 指纹
-src/pipeline/cache.ts     缓存根、原子写 JSON、单文件删除
-src/frames.ts             字符管线：gif → ffmpeg → chafa → 缓存
-src/images.ts             图片管线：gif → ffmpeg → pal8 PNG → base64
-src/kitty.ts              kitty 协议：编码、换 id、删除
-src/resources.ts          采集 version/model/theme/context/skills/…
-src/host.ts               从 pi 组件树摘除它自带的资源列表
-src/{config,layout,text,banner}.ts   一层 barrel，保持旧导入路径不变
+src/index.ts              入口：pi.on 接线、/splash 注册、re-export
+src/extension/state.ts    SessionState、`session.current`、errorText、contentSummary
+src/extension/session.ts  bootstrap / buildContent / refreshResources / scheduleRebuild
+src/extension/header.ts   installHeader（setHeader + 摘除 pi 的资源列表）/ restore / describeListing
+src/extension/commands.ts USAGE、SUBCOMMANDS、handleSplashCommand
+src/banner/component.ts   Banner 类：render / invalidate / dispose + 帧定时器
+src/banner/panels.ts      infoRows / sections / 状态行 / 占位卡 / describeConfig
+src/layout/box.ts         panel / infoBox / resourcePanel / wrapNames / distributeLines / themePainter
+src/layout/compose.ts     twoColumn / centerBlock / clampLines / compactSplash
+src/layout/metrics.ts     CHROME_ROWS / splashRows / blockWidthFor
+src/text/ansi.ts          ANSI_RE / isImageLine / stripAnsi
+src/text/width.ts         grapheme 与东亚宽度、visibleWidth、padVisible、centerVisible
+src/text/truncate.ts      truncateToWidth / truncateEllipsis / sliceVisible
+src/frames.ts             ffmpeg→chafa 帧管线、sanitizeFrame、磁盘缓存
+src/pipeline/process.ts   run（无 tty、超时）/ preflight / gifHash / probeSourceSize
+src/pipeline/timing.ts    每帧延时：probeGifTiming / aggregateDelays / thinDelays / describeTiming
+src/pipeline/args.ts      image.chafa 的 splitArgs / sanitizeChafaArgs / parseChafaArgs / argsDigest
+src/pipeline/cache.ts     cacheRoot / cacheFilePath / 原子写 / 单文件删除
+src/config/schema.ts      类型、DEFAULT_FILE、LIMITS、parseSize、palette 常量
+src/config/validate.ts    宽容解析：逐键警告，永不抛
+src/config/load.ts        pluginRoot / configPath / loadConfig / applySourceSize / 测试缝
+src/resources.ts          采集 version/model/theme/context/skills/themes/extensions
+src/host.ts               从 pi 组件树里纯内存摘除 loadedResourcesContainer
 ```
 
-## 3. 硬性不变式（改任何东西都要守住）
+关键锚点：`src/banner/component.ts` 的 `render` / `imageBudget` / `cropFrame` /
+`frameDelay` / `scheduleTick` / `start` / `dispose`；`src/layout/metrics.ts splashRows`；
+`src/layout/box.ts distributeLines`；`src/config/load.ts loadConfig`；`src/frames.ts loadFrames`；
+`src/pipeline/timing.ts aggregateDelays`；`src/host.ts detachResourceListing`。
 
-1. **每行宽度 ≤ width**（`visibleWidth` 量），`text/width.ts` 必须与 pi-tui 对等
-   （`test/text-parity.test.ts` 会拿真实实现比对）。
-2. **一维字符串数组 = 一行**，元素内不许有 `\n`。
-3. **chafa 参数不能省**：`--probe off`（否则等终端 DA 应答 5s 并抢 stdin）、
-   `--animate off`、`--symbols solid`；**不要加 `--clear`**。
-4. **`render()` 同步**：所有帧预渲染，绝不在这里 spawn。
-5. **组件只做 `render`/`invalidate`/`dispose`**，不抢焦点、不做浮层。
-6. **定时器 `unref()` 且 dispose 清理**；`agent_start` 暂停、`agent_end` 恢复。
-7. **不写用户 settings、不改 pi dist**；配置只走 `pi-chafa-banner.json`。
-7b. **对宿主组件树的改动必须纯内存、可逆、可降级**：只有 `host.ts` 摘除
-   `loadedResourcesContainer` 一处，失配静默降级，`/splash off` 会 `restore()`。
-8. **写盘只在 `<agent dir>/tmp/pi-chafa-banner/<sha1>/`**；临时目录按显式路径清理。
-9. **降级优先于报错**：缺 chafa/ffmpeg、gif 不存在、缓存损坏、终端过窄，都退到占位卡 /
-   紧凑文本 / 内置 header，并只提示一次。
-10. **图片行 + 其后 `r-1` 行严格 `""` 是唯一豁免补齐/截断/居中的行组合。** 图片行尾部不许
-    补空格（pi 的 `getKittyImageReservedRows` 遇 `visibleWidth > 0` 立即停止计数），续行必须是
-    字面 `""`，序列必须走 `renderImage(..., { imageId, moveCursor: false })`。
-11. **原生图片模式只能是「顶部整条图带 + 下方块」**，文字不能与图并排。
-12. **图片永远不裁剪、不缩小**。矮终端下图片按 `images.columns x images.rows` 原样输出，让位的
-    是下方 info/RESOURCES 面板（`lowerLines()` 在 `budget < MIN_BOX_ROWS` 时返回空）。原因有二：
-    用户明确要求；且 `renderImage()` 注册的 placement rows 是整张图的行数，改小的 `r=`/`c=` 会让
-    pi 的 reserved-row 计数与元数据失配，图片在轻微遮挡时被覆盖删除。占位卡只用于「还没有图」。
-13. **resize 必须换新 `imageId` 重传**：`Banner.syncTerminalShape()` 记住 `${columns}x${rows}`，
-    一变就 `fallbackImageId()` + `reassignKittyImageId()` 并清行缓存。原因：kitty 在视口变化时
-    丢/挪 placement，而 pi 的 fullscreen 路径一旦认为 id 已上传就用 `a=p`（无 payload）替换我们的
-    `a=T`（`tui-alt-screen.js prepareKittyScreen` + `terminal-image.js:353`）。
-    换下来的旧 id **不要立刻删**：pi 的缓存仍可能对旧行发 `a=p`，数据被删就只剩空白且永不修复。
-    旧 id 进 `retiredIds`，只淘汰第 4 个之前的老 id（`MAX_RETIRED_IDS = 3`）。
-14. **拆卸必须释放图片**：`dispose()`/`/splash off` 遍历 `ownedIds` + `retiredIds` 逐个发
-    `a=d,d=I,i=<id>,q=2`（`encodeKittyDelete()`），**禁止 `d=A`/`d=a`**。dispose 同步写，
-    运行期淘汰 `setTimeout(…,0)`；宿主没有 `terminal.write` 时必须静默降级。
+## 3. 硬性不变式
 
-## 4. 两条管线
+1. **每行宽度 ≤ width。** `render(width)` 每个字符串用 `visibleWidth()` 量必须 ≤ width；
+   `src/text/width.ts` 必须与 `@earendil-works/pi-tui` 的 `visibleWidth` 逐字对齐
+   （`test/text-parity.test.ts` 会拿真实实现对比）。
+2. **一维字符串数组 = 一行。** 不许在元素里塞 `\n`；chafa 输出必须先 split。
+3. **chafa 必须带 `--probe off` 和 `--animate off`。** 前者防止 chafa 等终端 DA 应答
+   （最多 5s）并抢走 pi 的 stdin，后者保证一次一帧。`--symbols solid` 只输出前景色块，
+   跨终端可对齐。**不要加 `--clear`**，它的 `ESC[2J/ESC[0H` 必须被 `stripChafaControl()`
+   剥掉。用户在 `image.chafa` 里写这三个参数会被 `sanitizeChafaArgs()` 丢弃。
+4. **`render()` 是同步的。** 所有帧必须预渲染并缓存在内存/磁盘，绝不在这里 spawn。
+5. **组件只做三件事：`render` / `invalidate` / `dispose`。** 不实现 `handleInput` /
+   `handleMouse`，不抢焦点、不做浮层——splash 必须是文档流里的一行才能随对话滚走。
+6. **定时器必须 `unref()` 且在 `dispose()` 里清掉**，`/splash off`、`session_shutdown`、
+   agent 流式输出期间（`agent_start` pause / `agent_end` resume）都要停。
+7. **不得写 `~/.pi/agent/settings.json`**，也不得改 pi 的 dist。配置只走
+   `pi-chafa-banner.json` + `/splash` 命令。
+7b. **对宿主组件树的改动必须是纯内存、可逆、可降级。** 目前只有 `src/host.ts` 摘除
+   `loadedResourcesContainer` 一例：位置假设是 `headerContainer` 之后紧跟 list 容器，
+   只认 duck-typed 容器（`children` + `removeChild`），失配就静默返回 undefined；
+   `/splash off` 必须 `restore()` 插回原索引。不要在 `render` 期间改树（用
+   `queueMicrotask`），不要写盘、不要打补丁。
+8. **所有写盘只在** `~/.pi/agent/tmp/pi-chafa-banner/<sha1>/`（跟随
+   `PI_CODING_AGENT_DIR`）。临时目录用显式路径清理，禁止通配符删除。
+9. **降级优先于报错。** 缺 chafa/ffmpeg、gif 不存在、缓存损坏、终端过窄，都要回退到
+   占位卡 / 紧凑文本 / 内置 header，并且只提示一次。
+10. **图片只在左列顶部、信息卡在它下面。** 图片宽度决定左列宽度，右侧 resources 与
+    左列底部对齐；这是「左上图片、左下 coding、右 resources」的唯一布局，不要改成
+    整条图带或把面板塞到图片右边（pi 的 `visibleWidth` 记账、用户的截图都按这个来）。
+11. **矮终端裁图片，不裁信息卡。** `imageBudget()` 从顶部裁剪字符画（`cropFrame`），
+    保证信息卡 + 状态行 + 堆叠面板始终完整；`IMAGE` 占位卡只用于「还没有图」
+    （构建中 / 构建失败 / 无图）。
+12. **帧的时间来自 GIF，不来自 fps。** `image.fps: "auto"`（默认）时用
+    `frames.delays[]`，`stride` 丢掉的帧时长要累加给保留帧（`aggregateDelays`），
+    这样一圈总时长不变；写数字才覆盖成固定帧率。
 
-两条管线共用同一套时长计算（`pipeline/timing.ts`）：gif 没有全局帧率，每帧自带 delay，
-所以 `probeGifTiming()`（ffprobe 取 pts + 容器时长）→ `aggregateDelays()`（stride 丢掉的帧，
-把时长并给保留下来的那一帧，一圈总时长不变）→ `thinDelays()`（再被 maxFrames / 内存上限抽稀时
-保持同样的映射）。**任何一次抽帧都必须同步抽 `delays`/`gapsMs`，否则画面会按 stride 倍速播放**。
-
-字符画：
-
-```
-gif → sha1(path+mtime+size) → ffmpeg 抽帧（≤240）→ chafa（-c full|256 -s WxH）
-    → stripChafaControl + sanitizeFrame → <cache>/<hash>/frames-<WxH>-<mode>.json
-    （payload 里带 delays[]，供 component 的 setTimeout 链逐帧定时）
-```
-
-原生图片：
+## 4. 帧管线（改渲染相关必读）
 
 ```
-gif → preflight（只要 ffmpeg）→ 单遍抽取+scale+palettegen/paletteuse → pal8 PNG
-    → stride 取样 → decimate(≤maxFrames) → base64 + gapsMs[]
-    → <cache>/<hash>/images-b<cols>x<rows>-c<cellW>x<cellH>-p<palette>-s<stride>.json
-    → allocateImageId() + renderImage(root, {imageId, moveCursor:false})
-    → anim 模式：每个 `a=f` 用自己的 `z=<gap>`，终端按 gif 原速自播（稳态 0 B/s）
+assets/banner.gif（或 image.path）
+  → sha1(path + mtimeMs + size)                   缓存命名与失效依据
+  → ffprobe pts_time + format=duration            每帧延迟
+  → ffmpeg -vsync 0 <cache>/work-*/f%03d.png      抽帧（最多 MAX_GIF_FRAMES=240）
+  → 每 image.stride 取一帧，被丢帧时长并给保留帧
+  → chafa -f symbols --symbols solid --probe off --animate off -c full|256 \
+          <image.chafa> -s WxH
+  → stripChafaControl + sanitizeFrame(rows=H, cols=W)
+  → <cache>/<hash>/frames-<WxH>-<color>[-<argsDigest>].json
 ```
 
-- 改 JSON 结构就要给 `CACHE_VERSION` / `IMAGE_CACHE_VERSION` +1。
-- `imageId` **绝不落盘**（跨进程会撞）。
-- 管线只按配置尺寸构建一次（高度永不随终端变化），所以矮终端/宽图都不会触发 re-encode 或缩小。
-- `image.height: "auto"` 由 ffmpeg 探测真实宽高比得到——chafa 需要固定画布，kitty 网格按像素
-  算，不统一两边行数就会不同。
+- 缓存带 `CACHE_VERSION`；**改 JSON 结构就要 +1**，否则老缓存会被误判有效。
+- 色深来自 `theme.getColorMode()`：`truecolor → -c full`、`256color → -c 256`。
+- `image.chafa` 同时进缓存文件名（8 位 digest）与 payload，两套配置不会串图。
+- 冷启动约 300–500ms，异步进行；构建期间 header 显示占位卡。
 
-## 5. 配置（`pi-chafa-banner.json`）
+## 5. 数据来源（右侧面板）
 
-放在**扩展所在目录**（全局安装 `~/.pi/agent/`，项目内 `<project>/.pi/`）。读取顺序：只读这一
-个文件，缺失键用默认值，非法值丢弃并记警告。关键键：`image.{path,width,height,fps,stride,
-renderer,native.*}`（`fps` 默认 `"auto"` = 按 gif 每帧自己的 delay；写数字才会覆盖成固定帧率）、`layout.{width,gap,twoColumnMinWidth,compactMinWidth,maxWidth,lowerRows}`、
-`panels.{info,resources}`、`behavior.{enabled,static,hidePiResourceList}`。完整表见 README，
-schema 见 `pi-chafa-banner.schema.json`。
+| 区块 | 来源 | 备注 |
+| --- | --- | --- |
+| Context | `scanContextFiles()`：`AGENTS.override.md/AGENTS.md/AGENTS.MD/CLAUDE.md/CLAUDE.MD`（cwd 及祖先、agentDir）、`APPEND_SYSTEM.md`（`<cwd>/.pi/`、agentDir） | 无公开 API，只能扫盘 |
+| Skills | `pi.getCommands()` 里 `name` 以 `skill:` 开头；首轮后用 `before_agent_start` 的 `event.systemPromptOptions.skills` 补全 | 首轮前可能不全 |
+| Themes | `ctx.ui.getAllThemes()` | |
+| Extensions | `pi.getCommands()` 的 `source:"extension"` + `settings.extensions` + `settings.packages` + `~/.pi/agent/extensions/*` | 无命令的扩展可能漏 |
+| version/model/theme | pi 包版本探测、`ctx.model.{provider,id}`、`pi.getSettings().theme` | |
 
-**不要**再加 `PI_BANNER_*` 环境变量（v2 已全部移除；只剩 `PI_CODING_AGENT_DIR` 与
-`PI_IMAGE_PROTOCOL`，二者属于 pi 本身）。
+采集整体 `try/catch`，任何一块失败只影响该区块。
 
 ## 6. 尺寸与布局阈值
 
-- 块宽 = `min(cols - 4, min(layout.maxWidth, layout.width))`（默认 88）。
-- 文档行数 = `terminalRows - CHROME_ROWS(7)`（editor 3 + footer 2 + header 上下 Spacer）。
-- 双栏阈值 `layout.twoColumnMinWidth`(76)，紧凑阈值 `layout.compactMinWidth`(32)。
-- 图片带：`images.rows` 行 + `IMAGE_GAP_ROWS` 个空行，恒原样；`body = splashRows(rows) - status`，
-  剩余空间 `< MIN_BOX_ROWS`(5) 时面板整块略去，图片仍然完整，因此 splash 可能比 body 更高（pi 会滚动）。
-- 回归办法：`preview --rows 18|20|24|30|40|50`，检查 `total-rows + CHROME_ROWS ≤ rows`。
-  超出会触发 pi 的 `fullRender(true)`（清 scrollback）。
+- 块宽 `blockWidthFor(cols, layout) = min(max(20, cols-4), min(layout.maxWidth, layout.width))`，默认 88、上限 108。
+- 左列宽由图片宽度驱动：`left = max(min(max(art||40,32), block), min(art, block))`；
+  `right = block - left - layout.gap`。
+- 双列条件：`block >= layout.twoColumnMinWidth`（默认 76）且 `right >= MIN_PANEL_WIDTH`（28）。
+- 低于 `layout.compactMinWidth`（32）退化成 3 行 `compactSplash()`。
+- 可用行数 `splashRows(rows) = max(10, rows - CHROME_ROWS)`，`CHROME_ROWS = 7`
+  （editor 3 + footer 2 + header 上下各一个 Spacer）。`imageBudget()` 从这份预算里
+  先扣 info 卡（`INFO_BOX_ROWS=5` + 1 空行）、状态行、堆叠面板，剩下的给图片。
+- 回归方式：`preview --rows 18|24|30|40|50` 目视 + `bun test` 的宽度契约用例。
 
-## 7. 常见改法
+## 7. 配置与命令
 
-- **换默认图**：覆盖 `assets/banner.gif`，或改 JSON 的 `image.path`（缓存按 mtime 失效）。
-- **改画布比例**：`layout.width` / `image.width`；height auto 会跟着推。
-- **改边框/配色**：只动 `layout/box.ts` 的 `THIN_BOX` 与 `themePainter()` 的 token 映射。
-- **加资源区块**：`layout/box.ts resourcePanel()` + `resources.ts collectResources()` +
-  `config/schema.ts` 的 `RESOURCE_SECTIONS` + `banner/panels.ts sections()`。
-- **加配置项**：`schema.ts`（类型+默认+limits）→ `validate.ts`（读取+警告）→
-  `pi-chafa-banner.schema.json` → `test/config.test.ts`。
-- **改动画节奏**：`pipeline/timing.ts`（`probeGifTiming`/`aggregateDelays`/`thinDelays`）决定每帧时长，
-  `banner/component.ts frameDelay()+scheduleTick()` 按帧自调度；`image.fps` 是覆盖用的固定速率。
-  保持 `unref()` 与暂停/恢复逻辑。
+`pi-chafa-banner.json` 放在**扩展旁边**（`configPath(pluginRoot())`）：全局安装是
+`~/.pi/agent/pi-chafa-banner.json`，项目安装是 `<project>/.pi/pi-chafa-banner.json`。
 
-## 8. 已知问题 / 盲区
+| 组 | 键（默认） |
+| --- | --- |
+| image | `path`（`~/Pictures/logo/v-3.gif` → 包内图）、`width` 44、`height` `"auto"`、`fps` `"auto"`、`stride` 3、`chafa` `""` |
+| layout | `width` 88、`gap` 4、`twoColumnMinWidth` 76、`compactMinWidth` 32、`maxWidth` 108、`lowerRows` 12 |
+| panels.info | `enabled` true、`fields` `["version","model","theme"]`（可选 `gif`/`frames`） |
+| panels.resources | `enabled` true、`sections` 全部、`width`/`height` `"auto"`、`maxLinesPerSection` 6 |
+| behavior | `enabled` true、`static` false、`hidePiResourceList` true |
 
-1. **kitty 只在真机能验收**。`PI_TUI_DEBUG_REDRAW=1 pi -e .` 看 `pi-tui-debug.log`，anim 模式下
-   **不应**出现 `fullRender: first changed < viewportTop`。resize/拆卸的字节级证据用
-   `/tmp/pcb-probe/pty2.py`（pty.fork + TIOCSWINSZ + SIGWINCH，分阶段抓原始流）：resize 应看到
-   新 id 的 `a=T…x=0,y=…,w=…,h=…,c=…,r=…`，shutdown 应看到 `a=d,d=I`。
-2. **iTerm2 未实现**（`caps.images === "iterm2"` 回退 chars）。
-3. **终端忽略 `a=f/a=a`**（Ghostty 等）时只剩根帧静态图，属预期降级；
-   `image.native.mode: "frames"` 是逃生阀，但每 tick 改图片行，长会话请配
-   `behavior.static` 或 `animSeconds`。
-4. **`types/pi-host.d.ts` / `types/pi-tui.d.ts` 是手写 shim**，会滞后于真实 API；改用法时对照
-   `pi` 包的 `dist/**/*.d.ts`。`TerminalLike.write` 是可选方法。
-5. **动画开销**：字符画约 21KB/帧 × 每秒帧数；图片 `anim` 稳态 0 B/s，`frames` 约 1.3MB/s。
-   长会话、全屏模式、慢终端建议加大 stride（`image.stride`）或 `behavior.static: true`。
-   注意**不要**用 `image.fps` 降速：它会覆盖 gif 自带时长，配合 stride 会让画面比原速快/慢。
+宽容策略：缺文件/缺键 → 默认值；类型或枚举错 → 默认值 + `source.warnings`；
+数值越界 → clamp + 警告；未知键静默忽略。`/splash status` 打印生效配置、缓存、
+工具检测与全部警告。
 
-## 9. 外部参考
+命令：`/splash on|off|freeze|rebuild|reload|status`。`off` 用
+`ctx.ui.setHeader(undefined)` 恢复内置 header 并 `restore()` pi 的资源列表。
 
-- `https://github.com/danielmrdev/beautiful-pi` —— 灵感（双栏 setHeader + RESOURCES 面板）
-- `https://github.com/mavam/pi-splash` —— 滚动行为、`unref()` 定时器、窄终端降级
-- pi 文档：`/usr/lib/node_modules/pi/packages/coding-agent/docs/{extensions,tui,packages,cli}.md`
-- pi-tui 源码：`packages/tui/dist/{tui-main-screen,tui-alt-screen,terminal-image,terminal}.js`
+## 8. 已知问题 / 路线图
+
+1. **kitty 原生图片已归档**：`archive/kitty-native-images` 分支（父提交 `ede1a32`）。
+   当时已实现：`planImageBand()` 裁剪 + `cropKittyRoot()` 改写根帧、`syncTerminalShape()`
+   换新 imageId 重传、`releaseImage()`/`encodeKittyDelete()` 拆卸删除，并在真机 pty 上
+   验证过（88x24 → `x=0,y=90,w=396,h=90,c=44,r=5`；shutdown `d=I`）。放弃原因：
+   pi 主屏 `tui-main-screen.js getKittyImageReservedRows()` 遇到非空单元格即停止计数，
+   图片右侧不可能放文字，因此两种模式风格无法统一；且 resize 后轻微遮挡会导致图片
+   被删且不再放回。**主分支不要再引入 `\x1b_G`。**
+2. **重复列表**：pi 内置的 `[Context]/[Skills]/[Extensions]` 由 `src/host.ts` 在挂载时
+   从 `tui` 组件树摘掉（纯内存、`/splash off` 插回、失配静默降级）；`/splash status`
+   报 `listing hidden|visible`。兜底是用户自己设 `"quietStartup": true`。
+3. **矮终端**：splash 只能用「文档视口」= `rows - CHROME_ROWS`。当前策略是裁字符画、
+   保信息卡；改尺寸逻辑时用 `preview --rows 18|20|24|30|40|50` 回归。
+4. **`types/pi-host.d.ts`** 是手写 shim（`TUI.mode` 的真实值是 `"regular"`）。
+   改扩展 API 用法时对照 `pi-coding-agent` 的 `dist/**/*.d.ts`。
+5. **动画开销**：字符画约 21KB/帧、`fps` 按 GIF 原生（示例 8 帧 2.4s）。长会话、
+   全屏模式、慢终端下建议 `behavior.static: true` 或调大 `stride`。
+6. **`fps` 写死数字会加速**：`stride` 丢掉帧后固定 fps 不等于原速，这正是默认
+   `"auto"` 的原因。
+7. **缓存目录会积累**：每次改 gif / 尺寸 / chafa 参数都会产生新 `<sha1>` 目录，
+   旧目录不自动清理（禁止批量删除，需要时手动删具体路径）。
+
+## 9. 常见改法
+
+- **换默认图**：改 `~/Pictures/logo/v-3.gif` 的内容，或设 `image.path`，或覆盖
+  `assets/banner.gif`（缓存按 mtime 失效，无需清缓存）。
+- **换画布尺寸/宽高比**：改 `image.width`（`height: "auto"` 会自动跟）；
+  然后检查左列宽与 `INFO_BOX_ROWS` 是否仍成立。
+- **改边框/配色**：只动 `src/layout/box.ts` 的 `THIN_BOX` 与 `themePainter()` 的
+  token 映射；不要硬编码 RGB，主题切换要跟着变。
+- **加资源区块**：`src/banner/panels.ts sections()` + `src/resources.ts collectResources()`
+  + `src/config/schema.ts` 的 `RESOURCE_SECTIONS`；`distributeLines()` 负责高度分配。
+- **改动画节奏**：`src/banner/component.ts` 的 `frameDelay()`/`scheduleTick()`、
+  `src/frames.ts` 的 stride 与 `src/pipeline/timing.ts` 的聚合；保持 `unref()` 与
+  暂停/恢复逻辑。
+- **调性能**：`image.stride`（少渲染）、`image.width/height`（小画布）、
+  `image.chafa`（例如 `--symbols block` 让每格用一个全块字符）。
+
+## 10. 外部参考
+
+- `https://github.com/danielmrdev/beautiful-pi` —— 同为 setHeader splash、
+  `╭─ RESOURCES ─╮` 面板的画法（灵感，无代码）。
+- `https://github.com/mavam/pi-splash` —— 滚动行为、`unref()` 定时器、窄终端处理（灵感，无代码）。
+- pi 文档：`/usr/lib/node_modules/pi/packages/coding-agent/docs/{extensions,tui,packages,cli}.md`；
+  组件契约看 `packages/tui/dist/tui.d.ts`。

@@ -8,7 +8,6 @@ import {
 	describeConfig,
 	describeConfigSource,
 	loadConfig,
-	paletteOf,
 	parseSize,
 	pluginRoot,
 	validateSettings,
@@ -46,7 +45,7 @@ describe("config: reading values", () => {
 		const config = load(
 			JSON.stringify({
 				version: 1,
-				image: { path: "/art/cat.gif", width: 60, height: 18, fps: 12, stride: 2, renderer: "chars" },
+				image: { path: "/art/cat.gif", width: 60, height: 18, fps: 12, stride: 2, chafa: "--symbols block" },
 				layout: { width: 100, gap: 6, lowerRows: 14 },
 				panels: { info: { enabled: false, fields: ["model"] }, resources: { sections: ["skills"], maxLinesPerSection: 3 } },
 				behavior: { static: true, hidePiResourceList: false },
@@ -57,7 +56,7 @@ describe("config: reading values", () => {
 		expect(config.heightAuto).toBe(false);
 		expect(config.fps).toBe(12);
 		expect(config.stride).toBe(2);
-		expect(config.renderer).toBe("chars");
+		expect(config.chafaArgs).toEqual(["--symbols", "block"]);
 		expect(config.layout).toMatchObject({ width: 100, gap: 6, lowerRows: 14 });
 		expect(config.panels.info).toEqual({ enabled: false, fields: ["model"] });
 		expect(config.panels.resources.sections).toEqual(["skills"]);
@@ -120,17 +119,17 @@ describe("config: tolerance", () => {
 	it("drops only the offending fields", () => {
 		const config = load(
 			JSON.stringify({
-				image: { width: "wide", fps: 100, renderer: "sixel", height: "tall" },
+				image: { width: "wide", fps: 100, chafa: 42, height: "tall" },
 				layout: { gap: true },
 			}),
 		);
 		expect(config.size.width).toBe(DEFAULTS.size.width);
 		expect(config.fps).toBe(30); // clamped, not dropped
-		expect(config.renderer).toBe("auto");
+		expect(config.chafaArgs).toEqual([]);
 		expect(config.heightAuto).toBe(true);
 		expect(config.layout.gap).toBe(DEFAULTS.layout.gap);
 		expect(config.source.warnings.join("\n")).toContain("image.width");
-		expect(config.source.warnings.join("\n")).toContain("image.renderer");
+		expect(config.source.warnings.join("\n")).toContain("image.chafa");
 		expect(config.source.warnings.join("\n")).toContain("layout.gap");
 	});
 
@@ -179,15 +178,9 @@ describe("config: helpers", () => {
 		expect(parseSize("1000x1000")).toEqual({ width: 160, height: 60 });
 	});
 
-	it("snaps palettes down to a supported size", () => {
-		expect(paletteOf(1)).toBe(16);
-		expect(paletteOf(200)).toBe(128);
-		expect(paletteOf(256)).toBe(256);
-	});
-
 	it("keeps the defaults self-consistent", () => {
 		expect(DEFAULTS.size.height).toBe(autoHeightFor(DEFAULTS.size.width));
 		expect(DEFAULTS.version).toBe(1);
-		expect(DEFAULTS.renderer).toBe("auto");
+		expect(DEFAULTS.chafaArgs).toEqual([]);
 	});
 });

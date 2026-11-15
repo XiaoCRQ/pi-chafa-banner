@@ -1,6 +1,6 @@
 /**
  * The text half of the splash: the coding-agent card, the RESOURCES groups and
- * the "no picture yet" cards.
+ * the "no picture yet" card.
  *
  * Pure functions of `(config, resources, …)` so the component stays a lifecycle
  * shell and these are trivially testable.
@@ -11,8 +11,6 @@ import type { FrameSet } from "../frames.ts";
 import { panel, type Painter, type ResourceSection } from "../layout.ts";
 import { truncateToWidth } from "../text.ts";
 
-/** Rows the native-mode placeholder card occupies (fixed, never height-dependent). */
-export const IMAGE_PLACEHOLDER_ROWS = 5;
 import type { BannerResources } from "../resources.ts";
 
 /** Facts shown in the coding-agent box, in `panels.info.fields` order. */
@@ -20,7 +18,6 @@ export function infoRows(
 	config: BannerConfig,
 	resources: BannerResources,
 	frames: FrameSet | undefined,
-	renderer: string,
 ): Array<{ label: string; value: string }> {
 	const values: Record<PanelField, string> = {
 		version: resources.version,
@@ -28,7 +25,6 @@ export function infoRows(
 		theme: resources.theme,
 		gif: config.gifPath ?? "(bundled)",
 		frames: frames ? `${frames.frames.length}/${frames.totalFrames}` : "pending",
-		renderer,
 	};
 	return config.panels.info.fields.map((field) => ({ label: field, value: values[field] ?? "" }));
 }
@@ -48,30 +44,18 @@ export function sections(config: BannerConfig, resources: BannerResources): Reso
 export function buildStatusLine(
 	config: BannerConfig,
 	frames: FrameSet | undefined,
-	renderer: string,
 	frozen: boolean,
 ): string {
 	const framePart = frames
 		? `frames=${frames.frames.length}/${frames.totalFrames} (stride ${frames.stride}${frames.fromCache ? ", cached" : ""})`
 		: "frames=pending";
-	return `${describeConfig(config)}  ${framePart}${frozen ? "  frozen" : ""} mode=${renderer}`;
+	return `${describeConfig(config)}  ${framePart}${frozen ? "  frozen" : ""}`;
 }
 
 /** One dimmed status line, clipped to the block. */
 export function statusLines(status: string | undefined, blockWidth: number, painter: Painter): string[] {
 	if (!status) return [];
 	return [painter.fg("dim", truncateToWidth(status, blockWidth, "…"))];
-}
-
-/**
- * Native-mode placeholder: five rows, always, so a failed build cannot push the
- * panels off a short terminal the way a 22-row card did.
- */
-export function imagePlaceholder(painter: Painter, status: string | undefined, width: number): string[] {
-	const note = status
-		? `unavailable: ${truncateToWidth(status, Math.max(8, width - 16), "…")}`
-		: "rendering image band…";
-	return panel("IMAGE", [painter.fg("dim", note)], width, painter, { fillTo: IMAGE_PLACEHOLDER_ROWS });
 }
 
 /**
@@ -89,5 +73,6 @@ export function charPlaceholder(painter: Painter, status: string | undefined, wi
 
 /** Short, stable description used by `/splash status` and the preview script. */
 export function describeConfig(config: BannerConfig): string {
-	return `size=${formatSize(config.size)} fps=${config.fps === "auto" ? "native" : config.fps} stride=${config.stride} mode=${config.static ? "static" : "anim"}`;
+	const chafa = config.chafaArgs.length > 0 ? ` chafa="${config.chafaArgs.join(" ")}"` : "";
+	return `size=${formatSize(config.size)} fps=${config.fps === "auto" ? "native" : config.fps} stride=${config.stride} mode=${config.static ? "static" : "anim"}${chafa}`;
 }

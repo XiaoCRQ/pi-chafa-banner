@@ -5,68 +5,45 @@
  * are pre-rendered by `frames.ts` and this class only indexes into them. The
  * timer just bumps the index, invalidates, and asks pi for a redraw.
  *
+ * Layout: the artwork sits at the top left, the info card right beneath it, and
+ * the RESOURCES panel runs down the right-hand side. When the terminal is too
+ * narrow for two columns the right panel drops below the left block, and below
+ * `layout.compactMinWidth` everything collapses into three plain lines.
+ *
  * Lifecycle: created inside the `setHeader` factory (which hands us the live
  * `tui` + `theme`), paused while the agent is streaming, disposed on
  * session shutdown / header replacement.
  */
 
 import type { Component, Theme, TUI } from "@earendil-works/pi-coding-agent";
-import { formatSize, type BannerConfig, type PanelField, type ResourceSectionId } from "../config.ts";
+import type { BannerConfig } from "../config.ts";
 import type { FrameSet } from "../frames.ts";
 import { DEFAULT_FRAME_DELAY_MS } from "../pipeline/timing.ts";
-import type { ImageFrameSet } from "../images.ts";
-import { buildImageLine, clearImageLineCache } from "./band.ts";
+import { buildStatusLine, charPlaceholder, describeConfig, infoRows as infoRowsFor, sections as sectionsFor, statusLines as statusLinesFor } from "./panels.ts";
 import {
-	buildStatusLine,
-	charPlaceholder,
-	describeConfig,
-	imagePlaceholder,
-	infoRows as infoRowsFor,
-	sections as sectionsFor,
-	statusLines as statusLinesFor,
-} from "./panels.ts";
-import { encodeKittyDelete, fallbackImageId, reassignKittyImageId } from "../kitty.ts";
-import {
-	IMAGE_GAP_ROWS,
 	blockWidthFor,
+	centerBlock,
 	compactSplash,
 	infoBox,
-	panel,
-	panelWidths,
 	resourcePanel,
 	splashRows,
 	themePainter,
 	twoColumn,
-	wrapNames,
 	type Painter,
 	type ResourceSection,
 } from "../layout.ts";
 import type { BannerResources } from "../resources.ts";
-import { isImageLine, maxVisibleWidth, padVisible, truncateToWidth, visibleWidth } from "../text.ts";
+import { padVisible, truncateToWidth, visibleWidth, maxVisibleWidth } from "../text.ts";
 
-/** Info card: 3 rows + 2 borders. */
+/** Info card: 3 content rows + 2 borders. */
 const INFO_BOX_ROWS = 5;
-/** Smallest box worth drawing: the info card (3 content rows + 2 borders). */
-const MIN_BOX_ROWS = 5;
-/** Lines the image-mode "no picture yet" card occupies (never height-dependent). */
-const IMAGE_PLACEHOLDER_ROWS = 5;
-
-/**
- * How many replaced image ids stay alive after a retransmission.
- *
- * Each one is a decoded frame buffer in the terminal (a few MB), so this is a
- * memory/robustness trade-off: enough to cover a resize burst while pi's cache
- * still points at them, few enough not to accumulate over a long session.
- */
-const MAX_RETIRED_IDS = 3;
+/** Width of the gap between the two columns. */
+const COLUMN_GAP_MIN = 2;
 
 export interface BannerInit {
 	config: BannerConfig;
 	resources: BannerResources;
 	frames?: FrameSet;
-	images?: ImageFrameSet;
-	/** `kitty` switches `render()` to the image band; `chars` is the default. */
-	renderer?: "chars" | "kitty";
 	status?: string;
 }
 
@@ -78,21 +55,9 @@ export class Banner implements Component {
 	private config: BannerConfig;
 	private resources: BannerResources;
 	private frames: FrameSet | undefined;
-	private images: ImageFrameSet | undefined;
-	private renderer: "chars" | "kitty";
 	private status: string | undefined;
 	private frameIndex = 0;
-	/** Last `${columns}x${rows}` seen by `render()`; a change forces a re-upload. */
-	private shapeKey = "";
-	/** Every id this banner ever transmitted, so teardown can free them all. */
-	private ownedIds = new Set<number>();
-	/** Ids replaced by a retransmission; pi may still re-place them via `a=p`. */
-	private retiredIds: number[] = [];
-	/** Image ids to delete once the current frame has been written. */
-	private pendingDeletes: number[] = [];
 	private timer: ReturnType<typeof setTimeout> | undefined;
-	/** `PI_BANNER_ANIM_SECONDS`: stop the animation after a while. */
-	private freezeTimer: ReturnType<typeof setTimeout> | undefined;
 	private visible: boolean;
 	private frozen: boolean;
 	private paused = false;
@@ -107,12 +72,9 @@ export class Banner implements Component {
 		this.config = init.config;
 		this.resources = init.resources;
 		this.frames = init.frames;
-		this.images = init.images;
-		this.renderer = init.renderer ?? "chars";
 		this.status = init.status;
 		this.visible = init.config.enabled;
 		this.frozen = init.config.static;
-		this.preloadImageLines();
 	}
 
 	// -- data ---------------------------------------------------------------
@@ -123,147 +85,6 @@ export class Banner implements Component {
 		if (count === 0) this.frameIndex = 0;
 		else this.frameIndex %= count;
 		this.start();
-	}
-
-	/**
-	 * Install (or drop) the native image. Dropping it keeps the renderer at kitty
-	 * so `render()` degrades to the placeholder card instead of switching layouts
-	 * mid-session.
-	 */
-	setImages(images: ImageFrameSet | undefined): void {
-		const previous = this.images;
-		this.images = images;
-		this.resetImageCaches();
-		// A rebuild allocates a new id. Keep the old picture alive for a while
-		// instead of deleting it: pi caches uploaded ids and would substitute a
-		// payload-less `a=p` for a line whose image we just freed — a picture that
-		// disappears and is never repaired.
-		if (previous && previous.imageId !== images?.imageId) this.retireImageId(previous.imageId);
-		if (images) this.ownedIds.add(images.imageId);
-		const count = images?.frames.length ?? 0;
-		if (count === 0) this.frameIndex = 0;
-		else this.frameIndex %= count;
-		this.start();
-		this.preloadImageLines();
-		this.invalidate();
-	}
-
-	/**
-	 * Compose the multi-megabyte image line(s) here, not inside `render()`.
-	 *
-	 * `render()` must stay a cheap synchronous composition (pi calls it on every
-	 * frame); building ~2 MB of base64 chunks there costs a single main-thread
-	 * concat per first paint. This runs right after the async image build, where
-	 * nobody is waiting on a frame.
-	 */
-	private preloadImageLines(): void {
-		const images = this.images;
-		if (!images || this.renderer !== "kitty" || images.frames.length === 0) return;
-		try {
-			this.imageLine(images);
-		} catch {
-			// Fall back to building it lazily on the first render.
-		}
-	}
-
-	private resetImageCaches(): void {
-		clearImageLineCache();
-	}
-
-	// -- terminal lifecycle --------------------------------------------------
-
-	/**
-	 * A resize makes the terminal reflow — and kitty may silently drop — the
-	 * placement, while pi's alt-screen path can substitute `a=p` (no payload) for
-	 * our root frame as long as it believes the id was already uploaded.
-	 *
-	 * Retransmitting under a fresh id invalidates that cache: pi sees an unknown
-	 * id and writes the full `a=T` sequence again. The old id is freed afterwards
-	 * (deferred, never inside `render()`).
-	 */
-	private syncTerminalShape(columns: number, rows: number): void {
-		const key = `${columns}x${rows}`;
-		if (this.shapeKey === key) return;
-		const first = this.shapeKey === "";
-		this.shapeKey = key;
-		if (first || this.renderer !== "kitty") return;
-		const images = this.images;
-		if (!images) return;
-		const imageId = fallbackImageId();
-		this.images = { ...images, imageId, sequence: reassignKittyImageId(images.sequence, imageId) };
-		this.ownedIds.add(imageId);
-		this.resetImageCaches();
-		this.retireImageId(images.imageId);
-		this.preloadImageLines();
-	}
-
-	/** Write a kitty control sequence to the terminal, if the host exposes it. */
-	private writeToTerminal(data: string): void {
-		const terminal = this.tui.terminal;
-		const write = terminal?.write;
-		if (typeof write !== "function") return;
-		try {
-			write.call(terminal, data);
-		} catch {
-			// Terminal already torn down; the placement dies with it.
-		}
-	}
-
-	/**
-	 * Free one image id (`a=d,d=I`). Deferred to the next tick by default so the
-	 * bytes never interleave with a frame pi is still composing; `now` is used on
-	 * the dispose path, where the process may exit before a timer fires.
-	 */
-	/**
-	 * Retire an id that is no longer on screen, without deleting it right away.
-	 *
-	 * pi keeps a per-session cache of ids it uploaded; while an id is cached it
-	 * rewrites our root frame as `a=p` (placement only, no payload). Deleting the
-	 * data first turns that rewrite into a blank band pi will never repair, since
-	 * from its side the image is still uploaded. The newest few retired ids stay
-	 * alive; only older ones are freed, and teardown frees everything.
-	 */
-	private retireImageId(imageId: number): void {
-		if (this.renderer !== "kitty") return;
-		if (imageId === this.images?.imageId) return;
-		this.ownedIds.add(imageId);
-		this.retiredIds.push(imageId);
-		while (this.retiredIds.length > MAX_RETIRED_IDS) {
-			const oldest = this.retiredIds.shift();
-			if (oldest !== undefined) this.releaseImageId(oldest);
-		}
-	}
-
-	/** Free one image id (`a=d,d=I`). Deferred to the next tick by default so the
-	 * bytes never interleave with a frame pi is still composing; `now` is used on
-	 * the dispose path, where the process may exit before a timer fires.
-	 */
-	releaseImageId(imageId: number, now = false): void {
-		if (this.renderer !== "kitty") return;
-		if (now) {
-			this.writeToTerminal(encodeKittyDelete(imageId));
-			return;
-		}
-		this.pendingDeletes.push(imageId);
-		const timer = setTimeout(() => {
-			const ids = this.pendingDeletes;
-			this.pendingDeletes = [];
-			for (const id of ids) this.writeToTerminal(encodeKittyDelete(id));
-		}, 0);
-		timer.unref?.();
-	}
-
-	/**
-	 * Drop the picture from the terminal. Called before the header goes away:
-	 * without this the placement survives `/splash off`, session shutdown and
-	 * process exit, leaving a picture that keeps animating behind the prompt.
-	 */
-	releaseImage(): void {
-		const ids = new Set<number>(this.ownedIds);
-		if (this.images) ids.add(this.images.imageId);
-		for (const id of ids) this.releaseImageId(id, true);
-		this.ownedIds.clear();
-		this.retiredIds = [];
 	}
 
 	setResources(resources: BannerResources): void {
@@ -278,11 +99,9 @@ export class Banner implements Component {
 
 	setConfig(config: BannerConfig): void {
 		this.config = config;
-		this.resetImageCaches();
 		this.frozen = config.static || this.frozen;
 		this.visible = config.enabled;
 		if (!this.visible) this.stopTimer();
-		this.preloadImageLines();
 		this.invalidate();
 	}
 
@@ -311,7 +130,6 @@ export class Banner implements Component {
 	/** `/splash freeze`: hold the current frame (or resume animating). */
 	toggleFreeze(): boolean {
 		this.frozen = !this.frozen;
-		clearImageLineCache();
 		if (this.frozen) this.stopTimer();
 		else this.start();
 		this.invalidate();
@@ -322,11 +140,7 @@ export class Banner implements Component {
 		return this.frozen;
 	}
 
-	/** Frames `render()` can show; kitty `anim` mode is one line by definition. */
 	private frameCount(): number {
-		if (this.renderer === "kitty" && this.images) {
-			return this.config.kittyMode === "frames" ? this.images.frames.length : 1;
-		}
 		return this.frames?.frames.length ?? 0;
 	}
 
@@ -337,7 +151,6 @@ export class Banner implements Component {
 		if (this.disposed || !this.visible || this.paused) return;
 		// Static mode = one frame, zero timers, zero requestRender churn.
 		if (this.frozen || this.config.static) return;
-		this.scheduleAutoFreeze();
 		if (this.frameCount() < 2) return;
 		this.scheduleTick();
 	}
@@ -347,14 +160,13 @@ export class Banner implements Component {
 	 *
 	 * A gif has no frame rate: every frame carries its own delay, and sampling
 	 * every Nth frame (`stride`) means each kept frame has to stay up N times
-	 * longer — that is what `delays`/`gapsMs` already encode. `image.fps` is an
-	 * explicit override for people who want a fixed rate regardless of the gif.
+	 * longer — that is what `delays` already encode. `image.fps` is an explicit
+	 * override for people who want a fixed rate regardless of the gif.
 	 */
 	private frameDelay(): number {
 		const fps = this.config.fps;
 		if (typeof fps === "number" && fps > 0) return Math.max(Banner.MIN_FRAME_MS, Math.round(1000 / fps));
-		const delays = this.renderer === "kitty" ? this.images?.gapsMs : this.frames?.delays;
-		const delay = delays?.[this.frameIndex];
+		const delay = this.frames?.delays[this.frameIndex];
 		return Math.max(Banner.MIN_FRAME_MS, Math.round(delay ?? DEFAULT_FRAME_DELAY_MS));
 	}
 
@@ -383,31 +195,6 @@ export class Banner implements Component {
 			clearTimeout(this.timer);
 			this.timer = undefined;
 		}
-		if (this.freezeTimer !== undefined) {
-			clearTimeout(this.freezeTimer);
-			this.freezeTimer = undefined;
-		}
-	}
-
-	/**
-	 * `PI_BANNER_ANIM_SECONDS > 0`: after N seconds the image becomes a still.
-	 * In kitty `anim` mode this rewrites the line (root frame only), which pi
-	 * detects as a change and retransmits — the documented cost of the knob.
-	 */
-	private scheduleAutoFreeze(): void {
-		const seconds = this.config.animSeconds;
-		if (!(seconds > 0)) return;
-		if (this.renderer !== "kitty" || !this.images) return;
-		const ms = Math.min(seconds * 1000, 2 ** 31 - 1);
-		this.freezeTimer = setTimeout(() => {
-			this.freezeTimer = undefined;
-			this.frozen = true;
-			clearImageLineCache();
-			this.stopTimer();
-			this.invalidate();
-			this.tui.requestRender();
-		}, ms);
-		this.freezeTimer.unref?.();
 	}
 
 	/** Fired on agent_start: streaming re-renders the document constantly. */
@@ -426,11 +213,9 @@ export class Banner implements Component {
 	dispose(): void {
 		this.disposed = true;
 		this.stopTimer();
-		// Free the placement first: this is the last moment the terminal is ours.
-		this.releaseImage();
-		// Drop the multi-megabyte base64/sequence strings.
-		this.resetImageCaches();
-		this.images = undefined;
+		// Drop the prerendered frames; a long session should not keep them alive
+		// behind a header the user has already replaced.
+		this.frames = undefined;
 	}
 
 	invalidate(): void {
@@ -439,7 +224,7 @@ export class Banner implements Component {
 	}
 
 	statusLine(): string {
-		return buildStatusLine(this.config, this.frames, this.renderer, this.frozen);
+		return buildStatusLine(this.config, this.frames, this.frozen);
 	}
 
 	// -- rendering ----------------------------------------------------------
@@ -465,155 +250,96 @@ export class Banner implements Component {
 		}
 
 		const blockWidth = blockWidthFor(cols, layout);
-		const leftPad = Math.max(0, Math.floor((cols - blockWidth) / 2));
-		const totalRows = splashRows(this.tui.terminal?.rows ?? 40);
-		const body = Math.max(0, totalRows - (this.status ? 1 : 0));
-		const band = this.bandLines(blockWidth);
-		const lines = [
-			...band,
-			...this.lowerLines(blockWidth, Math.max(0, body - band.length)),
-			...this.statusLines(blockWidth),
-		];
-
-		return lines.map((line) => {
-			if (line === "") return "";
-			// An image sequence owns its row: pi derives the reserved row count from
-			// the raw line, so only the centering pad may precede it.
-			if (isImageLine(line)) return leftPad > 0 ? " ".repeat(leftPad) + line : line;
-			return truncateToWidth(" ".repeat(leftPad) + padVisible(line, blockWidth), cols, "");
-		});
-	}
-
-	/**
-	 * Top of the splash: one full-width band for the artwork.
-	 *
-	 * Both renderers produce the same shape — a single pixel line plus `rows-1`
-	 * empty continuations, or chafa's character rows — so the panel block below
-	 * starts on the same row either way and the two modes look identical.
-	 *
-	 * The band is never cropped and never shrunk to fit the window: a picture that
-	 * is taller than the visible body is emitted whole (pi scrolls it), and the
-	 * panel block below gives way instead. Cropping also broke pi's placement
-	 * bookkeeping — `renderImage` registers `rows` for the full picture, so a
-	 * shortened `r=` desynchronised the reserved-row count and the placement was
-	 * erased as soon as the band was partially scrolled.
-	 */
-	private bandLines(blockWidth: number): string[] {
-		const rows = this.renderer === "kitty" ? this.pixelBand(blockWidth) : this.charBand(blockWidth);
-		return [...rows, ...Array.from({ length: IMAGE_GAP_ROWS }, () => "")];
-	}
-
-	/** Native pixels: one sequence line, `rows - 1` empty continuation rows. */
-	private pixelBand(blockWidth: number): string[] {
-		const terminalColumns = this.tui.terminal?.columns ?? blockWidth;
-		const terminalRows = this.tui.terminal?.rows ?? 40;
-		// Resize first: it may hand us a new image id, and that id must be on screen
-		// in the very frame the terminal reflows.
-		this.syncTerminalShape(terminalColumns, terminalRows);
-
-		const images = this.images;
-		if (!images) return this.imagePlaceholder(blockWidth);
-
-		const imgPad = Math.max(0, Math.floor((blockWidth - images.columns) / 2));
-		const rows = [(imgPad > 0 ? " ".repeat(imgPad) : "") + this.imageLine(images)];
-		// Continuation rows must be "" — see the class doc and AGENTS.md §3.10.
-		for (let index = 1; index < images.rows; index++) rows.push("");
-		return rows;
-	}
-
-	/** Character art: every chafa row, centred; never cut down. */
-	private charBand(blockWidth: number): string[] {
 		const frame = this.currentFrame();
-		if (!frame) return this.placeholder(blockWidth);
-		const rows = [...frame];
-		const width = Math.min(blockWidth, maxVisibleWidth(rows));
-		const pad = Math.max(0, Math.floor((blockWidth - width) / 2));
-		return rows.map((line) => " ".repeat(pad) + truncateToWidth(padVisible(line, width), width, ""));
-	}
-
-	/**
-	 * The block under the picture: info card on the left, RESOURCES on the right,
-	 * equal widths, equal heights, one shared divider column.
-	 */
-	private lowerLines(blockWidth: number, budget: number): string[] {
-		const layout = this.config.layout;
-		const painter = this.painter;
+		const imageWidth = frame ? Math.min(blockWidth, maxVisibleWidth(frame)) : 0;
 		const infoEnabled = this.config.panels.info.enabled;
 		const resourcesEnabled = this.config.panels.resources.enabled;
-		if (!infoEnabled && !resourcesEnabled) return [];
-		// The picture is never cut down, so on a short terminal the panels are the
-		// part that yields: below one bordered row they would only render a frame.
-		if (budget < MIN_BOX_ROWS) return [];
 
-		const infoRows = this.infoRows();
-		const sections = this.sections();
-		const stacked = blockWidth < layout.twoColumnMinWidth;
-		const widths = panelWidths(blockWidth, layout.gap, this.config.panels.resources.width);
-		const options = { maxLinesPerSection: this.config.panels.resources.maxLinesPerSection };
-
-		// Both boxes share one height so their bottom borders line up; content that
-		// would not fit grows the box up to the space the document body allows.
-		const wanted = this.config.panels.resources.height;
-		const contentRows = sections.reduce((sum, section) => {
-			const lines =
-				section.names.length === 0 ? 1 : wrapNames(section.names, Math.max(4, widths.right - 4)).length;
-			return sum + Math.min(lines, options.maxLinesPerSection);
-		}, 2);
-		const height = Math.max(
-			MIN_BOX_ROWS,
-			Math.min(
-				Math.max(budget, MIN_BOX_ROWS),
-				Math.max(layout.lowerRows, typeof wanted === "number" ? wanted : 0, contentRows),
-			),
+		// The artwork sets the width of the left column; the info card never
+		// shrinks below 32 columns so its labels stay readable.
+		const leftWidth = Math.max(
+			Math.min(Math.max(imageWidth || 40, 32), blockWidth),
+			Math.min(imageWidth, blockWidth),
 		);
+		const rightWidth = blockWidth - leftWidth - this.gap();
+		const twoColumns =
+			infoEnabled && resourcesEnabled && blockWidth >= layout.twoColumnMinWidth && rightWidth >= 28;
 
-		if (!resourcesEnabled) {
-			return infoEnabled ? infoBox("(pi) CODING AGENT", infoRows, blockWidth, painter, { fillTo: height }) : [];
-		}
-		if (!infoEnabled) {
-			return resourcePanel("RESOURCES", sections, blockWidth, painter, height, options);
-		}
-		if (stacked) {
-			const panelRows = Math.max(5, Math.min(height, budget - INFO_BOX_ROWS - 1));
-			return [
-				...infoBox("(pi) CODING AGENT", infoRows, blockWidth, painter, { fillTo: INFO_BOX_ROWS }),
-				"",
-				...resourcePanel("RESOURCES", sections, blockWidth, painter, panelRows, options),
-			];
-		}
+		const left = this.leftColumn(blockWidth, leftWidth, frame, twoColumns);
+		const right = resourcesEnabled
+			? resourcePanel("RESOURCES", this.sections(), twoColumns ? rightWidth : blockWidth, this.painter,
+					twoColumns ? left.length : this.stackedHeight(), {
+						maxLinesPerSection: this.config.panels.resources.maxLinesPerSection,
+					})
+			: [];
 
-		const left = infoBox("(pi) CODING AGENT", infoRows, widths.left, painter, { fillTo: height });
-		const right = resourcePanel("RESOURCES", sections, widths.right, painter, height, options);
-		return twoColumn(left, right, layout.gap, blockWidth);
+		const lines = twoColumns
+			? twoColumn(left, right, this.gap(), blockWidth)
+			: [...centerBlock(left, blockWidth), ...(right.length > 0 ? ["", ...right] : [])];
+		const status = this.status ? [this.painter.fg("dim", truncateToWidth(this.status, blockWidth, "…"))] : [];
+		const padded = [...lines, ...status].map((line) => (line === "" ? "" : padVisible(line, blockWidth)));
+		if (padded.every((line) => line === "")) return [];
+		return centerBlock(padded, cols).map((line) => truncateToWidth(line, cols, ""));
+	}
+
+	/**
+	 * Left column: the artwork, a blank line, then the info card.
+	 *
+	 * The frame is clipped to whatever the document body has left after the info
+	 * card and the status line (a text banner that overflows pushes pi's editor
+	 * around). `layout.lowerRows` is the floor for the whole block.
+	 */
+	private leftColumn(blockWidth: number, leftWidth: number, frame: string[] | undefined, twoColumns: boolean): string[] {
+		const rows = frame
+			? this.cropFrame(frame, leftWidth, this.imageBudget(twoColumns))
+			: this.placeholder(leftWidth);
+		const out = [...rows];
+		if (this.config.panels.info.enabled) {
+			out.push("", ...infoBox("(pi) CODING AGENT", this.infoRows(), leftWidth, this.painter, { fillTo: INFO_BOX_ROWS }));
+		}
+		return out;
+	}
+
+	/** Rows the artwork may use: body height minus the info card, gap and status. */
+	private imageBudget(twoColumns: boolean): number {
+		const totalRows = splashRows(this.tui.terminal?.rows ?? 40);
+		const overhead = (this.config.panels.info.enabled ? INFO_BOX_ROWS + 1 : 0) + (this.status ? 1 : 0);
+		const stacked = twoColumns ? 0 : this.stackedHeight() + 1;
+		return Math.max(1, totalRows - overhead - stacked);
+	}
+
+	/** Height of the RESOURCES panel when it sits below the left block. */
+	private stackedHeight(): number {
+		const wanted = this.config.panels.resources.height;
+		return Math.max(this.config.layout.lowerRows, typeof wanted === "number" ? wanted : 0);
+	}
+
+	/** Clip chafa's frame to `rows` lines starting from the top (faces live there). */
+	private cropFrame(frame: readonly string[], width: number, rows: number): string[] {
+		const out: string[] = [];
+		for (const line of frame.slice(0, Math.max(1, rows))) {
+			const trimmed = truncateToWidth(line, width, "");
+			const pad = Math.max(0, Math.floor((width - visibleWidth(trimmed)) / 2));
+			out.push(" ".repeat(pad) + trimmed);
+		}
+		return out;
+	}
+
+	/** "No picture yet": a five-row card that keeps the block size stable. */
+	private placeholder(width: number): string[] {
+		return charPlaceholder(this.painter, this.status, width, Math.min(this.config.size.height, 5));
+	}
+
+	private gap(): number {
+		return Math.max(COLUMN_GAP_MIN, this.config.layout.gap);
 	}
 
 	private infoRows(): Array<{ label: string; value: string }> {
-		return infoRowsFor(this.config, this.resources, this.frames, this.renderer);
+		return infoRowsFor(this.config, this.resources, this.frames);
 	}
 
 	private sections(): ResourceSection[] {
 		return sectionsFor(this.config, this.resources);
-	}
-
-	private statusLines(blockWidth: number): string[] {
-		return statusLinesFor(this.status, blockWidth, this.painter);
-	}
-
-	/** The line the terminal draws the picture on (see `banner/band.ts`). */
-	private imageLine(images: ImageFrameSet): string {
-		return buildImageLine(images, {
-			animate: !this.frozen && !this.config.static,
-			kittyMode: this.config.kittyMode,
-			frameIndex: this.frameIndex,
-		});
-	}
-
-	private imagePlaceholder(width: number): string[] {
-		return imagePlaceholder(this.painter, this.status, width);
-	}
-
-	private placeholder(width: number): string[] {
-		return charPlaceholder(this.painter, this.status, width, this.config.size.height);
 	}
 }
 

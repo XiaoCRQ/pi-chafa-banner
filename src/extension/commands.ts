@@ -8,10 +8,9 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { describeConfig, describeConfigSource, formatSize, loadSessionConfig, type BannerConfig } from "../config.ts";
 import { clearCache, preflight } from "../frames.ts";
-import { clearImageCache } from "../images.ts";
 import { describeListing, installHeader, restoreResourceListing } from "./header.ts";
 import { bootstrap, buildContent } from "./session.ts";
-import { contentSummary, describeImage, session } from "./state.ts";
+import { contentSummary, session } from "./state.ts";
 
 export const USAGE = "usage: /splash on | off | freeze | rebuild | reload | status";
 
@@ -45,7 +44,7 @@ export async function handleSplashCommand(pi: ExtensionAPI, ctx: ExtensionComman
 			current.lastDetachAt = 0;
 			if (!current.installed) installHeader(ctx, current);
 			current.banner?.setVisible(true);
-			if (current.renderer === "kitty" ? !current.images : !current.frames) void buildContent(ctx, current);
+			if (!current.frames) void buildContent(ctx, current);
 			ctx.ui.notify("pi-chafa-banner: on", "info");
 			return;
 		}
@@ -73,13 +72,7 @@ export async function handleSplashCommand(pi: ExtensionAPI, ctx: ExtensionComman
 			return;
 		}
 		case "rebuild": {
-			ctx.ui.notify(
-				current.renderer === "kitty" ? "pi-chafa-banner: rebuilding image…" : "pi-chafa-banner: rebuilding frames…",
-				"info",
-			);
-			// A rebuild is the user's "try again": allow the resize guard to run
-			// again afterwards.
-			current.imageRebuilds = 0;
+			ctx.ui.notify("pi-chafa-banner: rebuilding frames…", "info");
 			await buildContent(ctx, current, true);
 			const summary = contentSummary(current);
 			ctx.ui.notify(
@@ -98,14 +91,10 @@ export async function handleSplashCommand(pi: ExtensionAPI, ctx: ExtensionComman
 			current.config = next;
 			if (next.size.width !== previous.size.width || next.size.height !== previous.size.height) {
 				await clearCache(previous, current.theme?.getColorMode() ?? "truecolor");
-				await clearImageCache(previous, current.imageBudget);
 			}
 			current.frames = undefined;
-			current.images = undefined;
-			current.imageRebuilds = 0;
 			current.banner?.setConfig(next);
 			current.banner?.setFrames(undefined);
-			current.banner?.setImages(undefined);
 			await buildContent(ctx, current, true);
 			const summary = contentSummary(current);
 			const warnings = next.source.warnings;
@@ -126,7 +115,6 @@ export async function handleSplashCommand(pi: ExtensionAPI, ctx: ExtensionComman
 				current.frames
 					? `frames  ${current.frames.frames.length}/${current.frames.totalFrames} @ ${formatSize({ width: current.frames.width, height: current.frames.height })} ${current.frames.colorMode}${current.frames.fromCache ? " (cache)" : " (fresh)"}`
 					: `frames  pending${current.status ? ` — ${current.status}` : ""}`,
-				`image   ${describeImage(current)}`,
 				`tools   ${tools.ok ? Object.values(tools.versions).join(" | ") : `missing: ${tools.missing.join(", ")}`}`,
 				`listing ${describeListing(current)}`,
 			];

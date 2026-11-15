@@ -36,11 +36,11 @@ import {
 	type BannerConfig,
 	type RateSetting,
 } from "../src/config.ts";
-import { FrameError, loadFrames, missingToolsFor, preflight, type FrameSet } from "../src/frames.ts";
-import { describeGap, loadImageFrames, probeSourceSize, type ImageFrameSet } from "../src/images.ts";
-import { imageBandBudget, parseKittyRows } from "../src/layout.ts";
+import { FrameError, loadFrames, preflight, type FrameSet } from "../src/frames.ts";
+import { argsDigest, parseChafaArgs } from "../src/pipeline/args.ts";
+import { probeSourceSize } from "../src/pipeline/process.ts";
 import { describeTiming } from "../src/pipeline/timing.ts";
-import { isImageLine, visibleWidth } from "../src/text.ts";
+import { visibleWidth } from "../src/text.ts";
 import { collectResources, emptyResources, type BannerResources } from "../src/resources.ts";
 import type { Theme, TUI } from "@earendil-works/pi-coding-agent";
 
@@ -70,15 +70,8 @@ interface Args {
 	realResources: boolean;
 	/** First animation frame to show. */
 	frame: number;
-	/** Native image band instead of chafa characters. */
-	image: boolean;
-	/** Grid cap for the image; defaults to --size / DEFAULTS.size. */
-	imageCols?: number;
-	imageRows?: number;
-	/** Use pi-tui's real renderImage when it resolves (else the local encoder). */
-	realKitty: boolean;
-	/** Simulated PI_IMAGE_PROTOCOL value. */
-	imageProto?: string;
+	/** Extra chafa flags, overriding `image.chafa` from the config file. */
+	chafa?: string;
 	/** Explicit config file. */
 	config?: string;
 }
@@ -98,11 +91,7 @@ const USAGE = `usage: bun run scripts/preview.ts [flags]
   --no-frames         skip chafa and show the placeholder/degraded card
   --real-resources    scan the current machine instead of stub resources
   --plain             disable colors
-  --image             native kitty image band (requires ffmpeg)
-  --image-cols N      image grid columns cap (default: --size width)
-  --image-rows N      image grid rows cap (default: --size height)
-  --real-kitty        use pi-tui's renderImage instead of the local encoder
-  --image-proto P     simulate PI_IMAGE_PROTOCOL=kitty|iterm2|none
+  --chafa "ARGS"      extra chafa flags (same syntax as image.chafa)
   --256               render with the 256-color palette
   -h, --help          this text`;
 
@@ -139,8 +128,6 @@ function parseArgs(argv: string[]): Args {
 		colorMode: "truecolor",
 		realResources: false,
 		frame: 0,
-		image: false,
-		realKitty: false,
 	};
 
 	for (let i = 0; i < argv.length; i++) {
@@ -196,22 +183,8 @@ function parseArgs(argv: string[]): Args {
 			case "--plain":
 				args.plain = true;
 				break;
-			case "--image":
-				args.image = true;
-				break;
-			case "--image-cols":
-				args.imageCols = Math.max(1, positiveInt(argv[++i], 1));
-				break;
-			case "--image-rows":
-				args.imageRows = Math.max(1, positiveInt(argv[++i], 1));
-				break;
-			case "--real-kitty":
-				args.realKitty = true;
-				break;
-			case "--image-proto": {
-				const value = argv[++i];
-				args.imageProto = value;
-				if (value) process.env.PI_IMAGE_PROTOCOL = value;
+			case "--chafa": {
+				args.chafa = argv[++i] ?? "";
 				break;
 			}
 			case "--256":
@@ -230,10 +203,6 @@ function parseArgs(argv: string[]): Args {
 	if (args.static) args.frames = 1;
 	else if (args.framesGiven) args.static = false;
 	if (args.anim && !args.framesGiven) args.frames = Number.POSITIVE_INFINITY;
-	// `PI_IMAGE_PROTOCOL=kitty` means "this terminal speaks kitty", exactly what
-	// pi's capability probe reports at runtime, so it must select the native image
-	// path on its own — otherwise the env var silently does nothing.
-	if (!args.image && process.env.PI_IMAGE_PROTOCOL === "kitty") args.image = true;
 	return args;
 }
 
@@ -328,68 +297,16 @@ function printFrame(lines: readonly string[]): void {
 	process.stdout.write(`${lines.join("\n")}\n`);
 }
 
-/**
- * Structural self-check for the native image band. A terminal cannot verify
- * this for us: pi's contract is that the sequence line is followed by exactly
- * `r-1` empty strings, so that is what we assert here.
- */
-function checkLayout(lines: readonly string[], width: number, terminalRows: number, images?: ImageFrameSet): string[] {
+/** Contract checks a terminal cannot do for us: width, and rows vs. viewport. */
+function checkLayout(lines: readonly string[], width: number, terminalRows: number): string[] {
 	const problems: string[] = [];
-	const imageIndexes = lines.map((line, index) => (isImageLine(line) ? index : -1)).filter((index) => index >= 0);
-
-	if (images) {
-		if (imageIndexes.length > 1) problems.push(`expected exactly one image line, found ${imageIndexes.length}`);
-		const start = imageIndexes[0];
-		if (start !== undefined) {
-			// The band is never cropped, so the transmitted `r=` must equal what the
-			// pipeline built — pi registers that row count for the placement.
-			const band = bandRows(lines[start]!, images);
-			if (band !== images.rows) problems.push(`root frame says r=${band}, but ${images.rows} rows were built`);
-			for (let offset = 1; offset < band; offset++) {
-				if (lines[start + offset] !== "") {
-					problems.push(`reserved row ${start + offset} is not the empty string: ${JSON.stringify(lines[start + offset]?.slice(0, 20))}`);
-				}
-			}
-			if (lines[start + band] !== "") problems.push("the row after the band is not an empty gap row");
-		}
-	}
-
 	for (const [index, line] of lines.entries()) {
 		if (visibleWidth(line) > width) problems.push(`line ${index} is ${visibleWidth(line)} wide, terminal is ${width}`);
 	}
-	// The picture is never shortened, so a splash taller than the terminal is
-	// expected (pi scrolls it) — only complain when there is no picture to blame.
-	if (lines.length > terminalRows && imageIndexes.length === 0) {
+	if (lines.length > terminalRows) {
 		problems.push(`${lines.length} rows do not fit a ${terminalRows}-row terminal`);
 	}
 	return problems;
-}
-
-/** Rows the band actually reserves: the transmitted `r=`, else the built height. */
-function bandRows(line: string, images: ImageFrameSet): number {
-	return parseKittyRows(line) ?? images.rows;
-}
-
-/** Human/machine readable summary so `--image` is assertable without a TTY. */
-function describeImageStructure(lines: readonly string[], images: ImageFrameSet): string {
-	const start = lines.findIndex((line) => isImageLine(line));
-	if (start < 0) {
-		return `structure: no image line (placeholder card, ${lines.length} rows)`;
-	}
-	const line = lines[start]!;
-	const band = bandRows(line, images);
-	const reserved = lines.slice(start + 1, start + band).filter((entry) => entry === "").length;
-	const prefix = line.slice(0, line.indexOf(";") + 1).replace(/\x1b/g, "ESC");
-	return [
-		`structure: image line at row ${start}`,
-		`prefix=${prefix}`,
-		`bytes=${line.length}`,
-		`columns=${images.columns}`,
-		`r=${band}/${images.rows}`,
-		`reserved-empty-rows=${reserved}/${band - 1}`,
-		`lower-rows=${lines.length - start - band - 1}`,
-		`total-rows=${lines.length}`,
-	].join(" ");
 }
 
 async function main(): Promise<void> {
@@ -402,6 +319,7 @@ async function main(): Promise<void> {
 		config.heightAuto = false;
 	}
 	if (args.fps !== undefined) config.fps = args.fps;
+	if (args.chafa !== undefined) config.chafaArgs = parseChafaArgs(args.chafa);
 	if (args.static) config.static = true;
 	if (config.heightAuto && config.gifPath) {
 		try {
@@ -415,46 +333,9 @@ async function main(): Promise<void> {
 	stubTerminal.columns = args.width;
 
 	let frames: FrameSet | undefined;
-	let images: ImageFrameSet | undefined;
-	let status: string | undefined;
+	const status: string | undefined = undefined;
 
-	if (args.image) {
-		const tools = await preflight();
-		const missing = missingToolsFor(tools, "kitty");
-		if (missing.length > 0) {
-			console.error(
-				`preview: missing required tool${missing.length > 1 ? "s" : ""}: ${missing.join(", ")}\n` +
-					"  the native image path needs ffmpeg to extract and quantize the frames.",
-			);
-			process.exit(2);
-		}
-		const budget = imageBandBudget({
-			cols: args.width,
-			size: args.size ? parseSize(args.size, config.size) : config.size,
-		});
-		const maxColumns = args.imageCols ?? budget.maxColumns;
-		const maxRows = args.imageRows ?? budget.maxRows;
-		const started = Date.now();
-		try {
-			images = await loadImageFrames(config, { maxColumns, maxRows, payloadStub: !args.realKitty });
-			console.error(
-				`preview: image ${images.columns}x${images.rows}c ${images.pixelWidth}x${images.pixelHeight}px ` +
-					`${images.frames.length}/${images.totalFrames}f ${describeGap(images)} id=${images.imageId} ` +
-					`${images.fromCache ? "(cache)" : "(fresh)"} in ${Date.now() - started}ms`,
-			);
-			if (args.realKitty) {
-				const { loadKittyModule } = await import("../src/kitty.ts");
-				const kitty = await loadKittyModule();
-				if (!kitty) console.error("preview: pi-tui not resolvable here; using stub encoder");
-			}
-		} catch (error) {
-			const message = error instanceof FrameError ? error.message : String(error);
-			console.error(`preview: cannot build the image band — ${message}`);
-			process.exit(1);
-		}
-	}
-
-	if (args.useFrames && !args.image) {
+	if (args.useFrames) {
 		const tools = await preflight();
 		if (!tools.ok) {
 			console.error(
@@ -485,18 +366,16 @@ async function main(): Promise<void> {
 		config,
 		resources: await resolveResources(args.realResources),
 		frames,
-		images,
-		renderer: args.image ? "kitty" : "chars",
 		status,
 	});
 
-	const total = args.image ? (images?.frames.length ?? 1) : (frames?.frames.length ?? 0);
+	const total = frames?.frames.length ?? 0;
 
 	if (args.anim && total > 1) {
 		// Same rule as the component: an explicit `fps` wins, otherwise each frame
 		// uses the delay it carries (which is the gif's own timing).
 		const fixed = typeof config.fps === "number" ? config.fps : undefined;
-		const delays = args.image ? (images?.gapsMs ?? []) : (frames?.delays ?? []);
+		const delays = frames?.delays ?? [];
 		const delayFor = (index: number): number =>
 			fixed !== undefined
 				? Math.max(20, Math.round(1000 / fixed))
@@ -536,8 +415,7 @@ async function main(): Promise<void> {
 		if (i > 0) process.stdout.write("\n");
 		const lines = banner.render(args.width);
 		printFrame(lines);
-		const problems = checkLayout(lines, args.width, args.rows, images);
-		if (images) console.error(describeImageStructure(lines, images));
+		const problems = checkLayout(lines, args.width, args.rows);
 		if (problems.length > 0) {
 			console.error(`preview: layout check failed\n  ${problems.join("\n  ")}`);
 			process.exitCode = 1;
@@ -546,11 +424,7 @@ async function main(): Promise<void> {
 	console.error(
 		`preview: ${count === 1 ? "1 frame" : `${count} frames`}, width ${args.width}, ` +
 			`${args.static ? "static" : `anim ${typeof config.fps === "number" ? `${config.fps} fps` : "native"}`}, size ${formatSize(config.size)}` +
-			(images
-				? `, image ${images.frames.length}/${images.totalFrames}f at ${images.columns}x${images.rows}c`
-				: frames
-					? `, frame set ${frames.frames.length}/${frames.totalFrames}`
-					: ", placeholder"),
+			(frames ? `, frame set ${frames.frames.length}/${frames.totalFrames}` : ", placeholder"),
 	);
 	banner.dispose();
 }

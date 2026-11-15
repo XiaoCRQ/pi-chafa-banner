@@ -10,7 +10,6 @@ import { Banner } from "../banner.ts";
 import { detachResourceListing } from "../host.ts";
 import { maxVisibleWidth, padVisible, truncateToWidth } from "../text.ts";
 import { session, type SessionState } from "./state.ts";
-import { scheduleImageRebuild } from "./session.ts";
 
 const MAX_DETACH_ATTEMPTS = 20;
 const DETACH_COOLDOWN_MS = 250;
@@ -23,8 +22,6 @@ export function installHeader(ctx: ExtensionContext, current: SessionState): voi
 			config: current.config,
 			resources: current.resources,
 			frames: current.frames,
-			images: current.images,
-			renderer: current.renderer,
 			status: current.status,
 		});
 		current.banner = banner;
@@ -37,9 +34,6 @@ export function installHeader(ctx: ExtensionContext, current: SessionState): voi
 				// first few renders are the earliest safe moments to look for the
 				// resource listing in the live tree.
 				attemptDetach();
-				// A terminal resize changes the cell budget the pixels were encoded
-				// for; re-encode off the render path once things settle.
-				scheduleImageRebuild(ctx, current);
 				return banner.render(width);
 			},
 			invalidate: () => banner.invalidate(),

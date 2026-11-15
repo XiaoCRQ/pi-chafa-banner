@@ -39,7 +39,6 @@ cd "$REPO_ROOT"
 CONFIG="$REPO_ROOT/pi-chafa-banner.json"
 
 if [ "$MODE" = "preview" ]; then
-	export PI_IMAGE_PROTOCOL="${PI_IMAGE_PROTOCOL:-}"
 	exec bun run scripts/preview.ts ${ARGS[@]+"${ARGS[@]}"}
 fi
 

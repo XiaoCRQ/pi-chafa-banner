@@ -122,7 +122,7 @@ describe("cache paths", () => {
 	});
 
 	test("clearCache is a no-op without a gif", async () => {
-		const config: BannerConfig = { ...DEFAULTS, gifPath: undefined, enabled: true, renderer: "auto", static: false };
+		const config: BannerConfig = { ...DEFAULTS, gifPath: undefined, enabled: true, static: false };
 		expect(await clearCache(config, "truecolor")).toBe(false);
 	});
 });
@@ -195,12 +195,12 @@ describe("loadFrames", () => {
 	});
 
 	test("errors out when no gif is configured", async () => {
-		const config: BannerConfig = { ...DEFAULTS, gifPath: undefined, enabled: true, renderer: "auto", static: false };
+		const config: BannerConfig = { ...DEFAULTS, gifPath: undefined, enabled: true, static: false };
 		await expect(loadFrames(config, "truecolor")).rejects.toBeInstanceOf(FrameError);
 	});
 
 	test("errors out on a missing gif", async () => {
-		const config: BannerConfig = { ...DEFAULTS, gifPath: "/nonexistent/x.gif", enabled: true, renderer: "auto", static: false };
+		const config: BannerConfig = { ...DEFAULTS, gifPath: "/nonexistent/x.gif", enabled: true, static: false };
 		await expect(loadFrames(config, "truecolor")).rejects.toMatchObject({ code: "no-gif" });
 	});
 
@@ -213,7 +213,6 @@ describe("loadFrames", () => {
 			size: { width: 16, height: 8 },
 			stride: 30,
 			enabled: true,
-			renderer: "auto",
 			static: false,
 		};
 
@@ -249,7 +248,6 @@ describe("loadFrames", () => {
 			size: { width: 16, height: 8 },
 			stride: 60,
 			enabled: true,
-			renderer: "auto",
 			static: false,
 		};
 		await loadFrames(config, "truecolor", { force: true });

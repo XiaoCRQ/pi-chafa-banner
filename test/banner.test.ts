@@ -128,12 +128,13 @@ describe("Banner degraded states", () => {
 		banner.dispose();
 	});
 
-	test("keeps the whole art on short terminals; the info card gives way", () => {
+	test("a short terminal clips the art but keeps the info card", () => {
 		const { banner } = makeBanner({ frames: frames(), rows: 18 });
 		const lines = banner.render(100);
-		// 12 art rows + 1 gap against an 11-row body: the art wins.
-		expect(lines.length).toBe(13);
-		expect(lines.join("\n")).not.toContain("(pi) CODING AGENT");
+		// An 11-row body: the info card (5 rows + its blank) keeps its room and the
+		// 12-row artwork is clipped to what is left, so nothing overflows.
+		expect(lines.length).toBe(11);
+		expect(lines.join("\n")).toContain("(pi) CODING AGENT");
 		banner.dispose();
 	});
 
