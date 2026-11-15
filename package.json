@@ -17,7 +17,9 @@
 		"types",
 		"assets",
 		"README.md",
-		"README.zh-CN.md"
+		"README.zh-CN.md",
+		"pi-chafa-banner.example.json",
+		"pi-chafa-banner.schema.json"
 	],
 	"pi": {
 		"extensions": [

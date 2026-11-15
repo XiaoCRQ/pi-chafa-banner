@@ -11,7 +11,7 @@ import type {
 	TUI,
 } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "../src/text.ts";
-import { DEFAULTS, type BannerConfig } from "../src/config.ts";
+import { DEFAULTS, setConfigLoader, type BannerConfig } from "../src/config.ts";
 
 /**
  * These tests drive the real extension entry point against a fake pi host, so
@@ -110,19 +110,17 @@ async function runCommand(host: Host, args: string): Promise<void> {
 }
 
 const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-const previousGif = process.env.PI_BANNER_GIF;
 
 beforeEach(() => {
-	// A missing gif makes degradation deterministic and fast (no chafa runs).
-	process.env.PI_BANNER_GIF = "/nonexistent/pi-chafa-banner-test.gif";
+	// Tests inject their own config instead of writing pi-chafa-banner.json.
+	setConfigLoader(undefined);
 	process.env.PI_CODING_AGENT_DIR = join(tmpdir(), `pi-chafa-banner-index-test-${process.pid}`);
 });
 
 afterAll(() => {
 	if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-	if (previousGif === undefined) delete process.env.PI_BANNER_GIF;
-	else process.env.PI_BANNER_GIF = previousGif;
+	setConfigLoader(undefined);
 });
 
 describe("extension registration", () => {
@@ -135,8 +133,8 @@ describe("extension registration", () => {
 	test("provides argument completions for the subcommands", async () => {
 		const host = makeHost();
 		piChafaBanner(host.pi);
-		const completions = await host.commands.get("splash")!.getArgumentCompletions!("si");
-		expect(completions?.map((entry) => entry.value)).toEqual(["size"]);
+		const completions = await host.commands.get("splash")!.getArgumentCompletions!("re");
+		expect(completions?.map((entry) => entry.value)).toEqual(["rebuild", "reload"]);
 	});
 
 	test("does nothing in non-TUI modes", async () => {
@@ -156,6 +154,7 @@ describe("extension registration", () => {
 
 describe("session lifecycle", () => {
 	test("installs a header that degrades to a diagnostic for a bad gif", async () => {
+		setConfigLoader(() => ({ ...DEFAULTS, gifPath: "/nonexistent/x.gif" }));
 		const host = makeHost();
 		piChafaBanner(host.pi);
 		await host.fire("session_start", { type: "session_start", reason: "startup" });
@@ -223,7 +222,8 @@ describe("/splash commands", () => {
 		await runCommand(host, "status");
 		const status = host.notices.map((notice) => notice.message).join("\n");
 		expect(status).toContain("config");
-		expect(status).toContain("size=44x22");
+		expect(status).toContain("image=44x22");
+		expect(status).toContain("source  built-in defaults");
 	});
 
 	test("freeze toggles the animation flag", async () => {
@@ -255,16 +255,20 @@ describe("/splash commands", () => {
 		expect(host.render(100).length).toBeGreaterThan(0);
 	});
 
-	test("size rejects garbage and accepts WxH", async () => {
+	test("reload re-reads the config file and reports its warnings", async () => {
+		setConfigLoader(() => ({
+			...DEFAULTS,
+			gifPath: "/nonexistent/x.gif",
+			source: { path: "/tmp/plugin/pi-chafa-banner.json", warnings: ['image.fps: expected a number between 1 and 30, got "fast"'] },
+		}));
 		const host = makeHost();
 		piChafaBanner(host.pi);
 		await host.fire("session_start", { type: "session_start", reason: "startup" });
-
-		await runCommand(host, "size huge");
-		expect(host.notices.some((notice) => notice.message.includes("invalid size") && notice.type === "warning")).toBe(true);
-
-		await runCommand(host, "size 30x15");
-		expect(host.notices.some((notice) => notice.message.includes("30x15"))).toBe(true);
+		await runCommand(host, "reload");
+		const message = host.notices.map((notice) => notice.message).join("\n");
+		expect(message).toContain("pi-chafa-banner: reload");
+		expect(message).toContain("/tmp/plugin/pi-chafa-banner.json");
+		expect(message).toContain("image.fps");
 	});
 
 	test("unknown subcommands print usage instead of throwing", async () => {
@@ -338,19 +342,15 @@ describe("image mode wiring", () => {
 		for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(100);
 	});
 
-	test("PI_BANNER_RENDERER=kitty without protocol support falls back with one notice", async () => {
-		process.env.PI_BANNER_RENDERER = "kitty";
-		try {
-			const host = makeHost();
-			piChafaBanner(host.pi);
-			await host.fire("session_start", { type: "session_start", reason: "startup" });
-			const messages = host.notices.map((notice) => notice.message);
-			expect(messages.some((message) => message.includes("no inline image protocol"))).toBe(true);
-			expect(messages.filter((message) => message.includes("no inline image protocol")).length).toBe(1);
-			const lines = host.render(100);
-			expect(lines.some((line) => line.includes("\x1b_G"))).toBe(false);
-		} finally {
-			delete process.env.PI_BANNER_RENDERER;
-		}
+	test('image.renderer = "kitty" without protocol support falls back with one notice', async () => {
+		setConfigLoader(() => ({ ...DEFAULTS, renderer: "kitty" }));
+		const host = makeHost();
+		piChafaBanner(host.pi);
+		await host.fire("session_start", { type: "session_start", reason: "startup" });
+		const messages = host.notices.map((notice) => notice.message);
+		expect(messages.some((message) => message.includes("no inline image protocol"))).toBe(true);
+		expect(messages.filter((message) => message.includes("no inline image protocol")).length).toBe(1);
+		const lines = host.render(100);
+		expect(lines.some((line) => line.includes("\x1b_G"))).toBe(false);
 	});
 });

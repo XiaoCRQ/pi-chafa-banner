@@ -1,0 +1,46 @@
+{
+  "$schema": "./pi-chafa-banner.schema.json",
+  "version": 1,
+  "image": {
+    "path": "~/Pictures/logo/v-3.gif",
+    "width": 44,
+    "height": "auto",
+    "fit": "crop",
+    "fps": 16,
+    "stride": 3,
+    "renderer": "auto",
+    "native": {
+      "mode": "anim",
+      "palette": 128,
+      "maxPixels": 640000,
+      "maxFrames": 24,
+      "animSeconds": 0
+    }
+  },
+  "layout": {
+    "width": 88,
+    "gap": 4,
+    "twoColumnMinWidth": 76,
+    "compactMinWidth": 32,
+    "maxWidth": 108,
+    "lowerRows": 12
+  },
+  "panels": {
+    "info": {
+      "enabled": true,
+      "fields": ["version", "model", "theme"]
+    },
+    "resources": {
+      "enabled": true,
+      "sections": ["context", "skills", "themes", "extensions"],
+      "width": "auto",
+      "height": "auto",
+      "maxLinesPerSection": 6
+    }
+  },
+  "behavior": {
+    "enabled": true,
+    "static": false,
+    "hidePiResourceList": true
+  }
+}

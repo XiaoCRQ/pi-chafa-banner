@@ -16,7 +16,13 @@ import type {
 	TUI,
 } from "@earendil-works/pi-coding-agent";
 import { Banner } from "./banner.ts";
-import { describeConfig, formatSize, loadConfig, parseSize, type BannerConfig } from "./config.ts";
+import {
+	describeConfig,
+	describeConfigSource,
+	formatSize,
+	loadSessionConfig,
+	type BannerConfig,
+} from "./config.ts";
 import { clearCache, FrameError, loadFrames, preflight, type FrameSet } from "./frames.ts";
 import { detachResourceListing, type DetachedListing } from "./host.ts";
 import { clearImageCache, loadImageFrames, type ImageFrameSet } from "./images.ts";
@@ -55,7 +61,7 @@ interface SessionState {
 
 let state: SessionState | undefined;
 
-const USAGE = "usage: /splash on | off | freeze | rebuild | size <WxH> | status";
+const USAGE = "usage: /splash on | off | freeze | rebuild | reload | status";
 
 /** Give a late-mounting header a few seconds to expose its sibling listing. */
 const MAX_DETACH_ATTEMPTS = 20;
@@ -65,7 +71,7 @@ const IMAGE_REBUILD_DEBOUNCE_MS = 300;
 /** Encoding is expensive; two corrections per session is enough. */
 const MAX_IMAGE_REBUILDS = 2;
 
-const SUBCOMMANDS = ["on", "off", "freeze", "rebuild", "size", "status"].map((value) => ({
+const SUBCOMMANDS = ["on", "off", "freeze", "rebuild", "reload", "status"].map((value) => ({
 	value,
 	label: value,
 	description: `/splash ${value}`,
@@ -350,13 +356,13 @@ function safeSettings() {
 
 async function bootstrap(pi: ExtensionAPI, ctx: ExtensionContext): Promise<SessionState> {
 	cachedPi = pi;
-	const config = loadConfig();
+	const config = loadSessionConfig();
 	const resources = await collectFor(ctx, config);
 	const current = createState(config, resources);
 	state = current;
 
 	if (!config.enabled) {
-		ctx.ui.notify("pi-chafa-banner: disabled (PI_BANNER_DISABLED=1)", "info");
+		ctx.ui.notify("pi-chafa-banner: disabled (behavior.enabled is false in pi-chafa-banner.json)", "info");
 		return current;
 	}
 
@@ -467,44 +473,38 @@ async function handleSplashCommand(pi: ExtensionAPI, ctx: ExtensionCommandContex
 			);
 			return;
 		}
-		case "size": {
-			const requested = rest[0];
-			if (!requested) {
-				ctx.ui.notify(`pi-chafa-banner: size is ${formatSize(current.config.size)}. ${USAGE}`, "info");
-				return;
-			}
-			const parsed = parseSize(requested, current.config.size);
-			if (!/^\s*\d+\s*[xX*]\s*\d+\s*$/.test(requested)) {
-				ctx.ui.notify(`pi-chafa-banner: invalid size "${requested}". ${USAGE}`, "warning");
-				return;
-			}
+		case "reload": {
+			// Re-read pi-chafa-banner.json. Everything downstream (frames, pixels,
+			// banner config) is keyed by the old values, so drop it all and rebuild.
 			const previous = current.config;
-			current.config = { ...current.config, size: parsed };
-			// Cache entries are keyed by size, so drop the OLD size before switching;
-			// clearing after the assignment deleted the new (nonexistent) key instead.
-			await clearCache(previous, current.theme?.getColorMode() ?? "truecolor");
-			// The image cache is keyed by the cell grid, so drop the OLD key too.
-			await clearImageCache(previous, current.imageBudget);
+			const next = loadSessionConfig();
+			current.config = next;
+			if (next.size.width !== previous.size.width || next.size.height !== previous.size.height) {
+				await clearCache(previous, current.theme?.getColorMode() ?? "truecolor");
+				await clearImageCache(previous, current.imageBudget);
+			}
 			current.frames = undefined;
 			current.images = undefined;
 			current.imageRebuilds = 0;
-			current.banner?.setConfig(current.config);
+			current.banner?.setConfig(next);
 			current.banner?.setFrames(undefined);
 			current.banner?.setImages(undefined);
 			await buildContent(ctx, current, true);
 			const summary = contentSummary(current);
-			ctx.ui.notify(
-				summary
-					? `pi-chafa-banner: size ${formatSize(parsed)}`
-					: `pi-chafa-banner: size ${formatSize(parsed)} failed: ${current.status ?? "unknown"}`,
-				summary ? "info" : "warning",
-			);
+			const warnings = next.source.warnings;
+			const lines = [
+				`pi-chafa-banner: ${summary ? `reloaded ${summary}` : `reload failed: ${current.status ?? "unknown error"}`}`,
+				`config  ${describeConfigSource(next)}`,
+			];
+			for (const warning of warnings) lines.push(`warn    ${warning}`);
+			ctx.ui.notify(lines.join("\n"), summary ? "info" : "warning");
 			return;
 		}
 		case "status": {
 			const tools = await preflight();
 			const lines = [
 				`config  ${describeConfig(current.config)}`,
+				`source  ${describeConfigSource(current.config)}`,
 				`header  ${current.installed ? (current.banner?.isVisible() ? "installed" : "hidden") : "not installed"}`,
 				current.frames
 					? `frames  ${current.frames.frames.length}/${current.frames.totalFrames} @ ${formatSize({ width: current.frames.width, height: current.frames.height })} ${current.frames.colorMode}${current.frames.fromCache ? " (cache)" : " (fresh)"}`
@@ -513,6 +513,7 @@ async function handleSplashCommand(pi: ExtensionAPI, ctx: ExtensionCommandContex
 				`tools   ${tools.ok ? Object.values(tools.versions).join(" | ") : `missing: ${tools.missing.join(", ")}`}`,
 				`listing ${describeListing(current)}`,
 			];
+			for (const warning of current.config.source.warnings) lines.push(`warn    ${warning}`);
 			ctx.ui.notify(lines.join("\n"), "info");
 			return;
 		}
@@ -569,7 +570,7 @@ export default function piChafaBanner(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("splash", {
-		description: "Control the chafa startup banner (on|off|freeze|rebuild|size|status)",
+		description: "Control the chafa startup banner (on|off|freeze|rebuild|reload|status)",
 		getArgumentCompletions: (prefix) => {
 			const filtered = SUBCOMMANDS.filter((entry) => entry.value.startsWith(prefix.trim()));
 			return filtered.length > 0 ? filtered : null;
