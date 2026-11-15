@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # Smoke test for pi-chafa-banner.
 #
-#   bash scripts/demo.sh                 # start pi with the extension loaded
+#   bash scripts/demo.sh                 # start pi with ONLY this banner loaded
 #   bash scripts/demo.sh --preview       # same layout, no TUI (fastest loop)
 #   bash scripts/demo.sh --preview --size 60x30
+#   bash scripts/demo.sh --offline       # extra flags go to pi
+#
+# `pi --no-extensions -e .` disables extension discovery (global installs,
+# `settings.extensions`, built-in extensions) and then loads this package
+# explicitly — so the demo shows the splash alone, without other plugins'
+# headers, commands or tools in the way.
 #
 # Configuration lives in `pi-chafa-banner.json` next to this package (see
 # README.md); this script never sets environment variables and never writes the
@@ -12,10 +18,13 @@ set -euo pipefail
 
 usage() {
 	cat <<'EOF'
-usage: bash scripts/demo.sh [--preview [preview flags]] [--help]
+usage: bash scripts/demo.sh [--preview [preview flags...] | pi flags...] [-h]
 
   --preview     render the splash with scripts/preview.ts instead of starting pi
   -h, --help    this text
+
+Without --preview every other argument is handed to `pi`, which runs as
+`pi --no-extensions -e . <args>`: only this banner is loaded, no other plugins.
 
 Real runs read <repo>/pi-chafa-banner.json; copy
 pi-chafa-banner.example.json to that name and edit it.
@@ -54,6 +63,6 @@ if [ -f "$CONFIG" ]; then
 else
 	echo "  config: built-in defaults (no pi-chafa-banner.json; copy the example to change it)"
 fi
-echo "  start:  pi -e ."
+echo "  start:  pi --no-extensions -e .  (only this banner; other plugins off)"
 echo
-exec pi -e .
+exec pi --no-extensions -e . ${ARGS[@]+"${ARGS[@]}"}
