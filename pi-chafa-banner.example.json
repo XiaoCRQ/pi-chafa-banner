@@ -3,15 +3,13 @@
   "version": 1,
   "image": {
     "path": "~/Pictures/logo/v-3.gif",
-    "width": 44,
-    "height": "auto",
     "fps": "auto",
     "stride": 3,
     "chafa": ""
   },
   "layout": {
     "width": 88,
-    "gap": 4,
+    "gap": 2,
     "twoColumnMinWidth": 76,
     "compactMinWidth": 32,
     "maxWidth": 108,

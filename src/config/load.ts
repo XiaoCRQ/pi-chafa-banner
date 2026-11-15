@@ -17,6 +17,7 @@ import {
 	DEFAULT_FILE,
 	LIMITS,
 	clamp,
+	derivedCanvas,
 	formatSize,
 	type BannerConfig,
 	type BannerSize,
@@ -107,20 +108,14 @@ function resolveGifPath(configured: string | undefined, root: string): string | 
 	return bundledGifPath(root);
 }
 
-/** Rough `auto` height before the gif is probed: cells are twice as tall as wide. */
-export function autoHeightFor(width: number): number {
-	return clamp(Math.round(width / 2), LIMITS.height.min, LIMITS.height.max);
-}
-
 /**
- * Refine `height: "auto"` once the actual artwork dimensions are known.
+ * Refine the canvas height once the actual artwork dimensions are known.
  *
  * Terminal cells are ~9x18 px, so a `srcH/srcW` aspect ratio becomes
  * `width * aspect * 0.5` character rows. Called from the build path, right
  * before frames are rendered; the pipeline needs a fixed grid for its cache key.
  */
 export function applySourceSize(config: BannerConfig, source: { width: number; height: number }): BannerConfig {
-	if (!config.heightAuto) return config;
 	if (!(source.width > 0) || !(source.height > 0)) return config;
 	const height = clamp(
 		Math.round((config.size.width * source.height) / source.width / 2),
@@ -160,20 +155,16 @@ export function loadConfig(options: LoadOptions = {}): BannerConfig {
 	warnings.push(...settings.warnings);
 	const source: ConfigSource = { path: text !== undefined ? path : undefined, warnings };
 
-	const heightAuto = settings.image.height === "auto";
-	const size: BannerSize = {
-		width: settings.image.width,
-		height: heightAuto ? autoHeightFor(settings.image.width) : (settings.image.height as number),
-	};
-
+	// The canvas is derived, not configured: two equal columns, so the artwork is
+	// exactly one column wide and the height follows the gif's aspect ratio.
 	const layout: LayoutSettings = settings.layout;
+	const size: BannerSize = derivedCanvas(layout);
 	const panels: PanelsSettings = settings.panels;
 
 	return {
 		version: 1,
 		gifPath: resolveGifPath(settings.image.path, root),
 		size,
-		heightAuto,
 		fps: settings.image.fps,
 		stride: settings.image.stride,
 		chafaArgs: parseChafaArgs(settings.image.chafa),
@@ -211,7 +202,8 @@ export function describeConfigSource(config: BannerConfig): string {
 export function describeConfig(config: BannerConfig): string {
 	return [
 		`gif=${config.gifPath ?? "(none)"}`,
-		`image=${formatSize(config.size)}${config.heightAuto ? " (height auto)" : ""}`,
+		`image=${formatSize(config.size)} (derived)`,
+		`gap=${config.layout.gap}`,
 		`layout=${config.layout.width}`,
 		`fps=${config.fps === "auto" ? "native" : config.fps}`,
 		`stride=${config.stride}`,
@@ -238,11 +230,7 @@ export const BUNDLED_GIF_PATH = bundledGifPath(PACKAGE_ROOT);
 export const DEFAULTS: BannerConfig = {
 	version: 1,
 	gifPath: BUNDLED_GIF_PATH,
-	size: {
-		width: DEFAULT_FILE.image.width,
-		height: autoHeightFor(DEFAULT_FILE.image.width),
-	},
-	heightAuto: DEFAULT_FILE.image.height === "auto",
+	size: derivedCanvas(DEFAULT_FILE.layout),
 	fps: DEFAULT_FILE.image.fps,
 	stride: DEFAULT_FILE.image.stride,
 	chafaArgs: parseChafaArgs(DEFAULT_FILE.image.chafa),

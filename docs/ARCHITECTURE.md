@@ -80,16 +80,17 @@ payload, so two configurations never share frames.
 ## 4. Layout
 
 ```
-block  = min(cols - 4, layout.maxWidth, layout.width)
-art    = min(block, widest art row)             left column width driver
-info   = clamp(max(art || 40, 32), 32, block)
-left   = max(info, min(art, block))             art and card share one column
-right  = block - left - layout.gap
+block  = cols >= ceiling ? ceiling : max(20, cols - 4)   ceiling = min(maxWidth, width)
+column = floor((block - layout.gap) / 2)        both sides, always equal
+canvas = column x autoHeightFor(column)         chafa renders at exactly this size
 ```
 
-Two columns when `block >= layout.twoColumnMinWidth` and `right >= 28`; otherwise
-the resource panel stacks under the card. Below `layout.compactMinWidth` the whole
-splash collapses to `compactSplash()`: three plain lines.
+There is no image size setting: the artwork is one column wide, and its height
+follows the gif's aspect ratio (`applySourceSize()` refines `column / 2`). Two
+columns when `block >= layout.twoColumnMinWidth` and `column >= 28`; otherwise the
+resource panel stacks under the card, both at full `block` width. Below
+`layout.compactMinWidth` the whole splash collapses to `compactSplash()`: three
+plain lines.
 
 Rows come from `splashRows(terminalRows) = max(10, rows - CHROME_ROWS)` with
 `CHROME_ROWS = 7` (editor 3, footer 2, the two spacers around the header). The art
@@ -127,9 +128,10 @@ Break one of these and pi's renderer corrupts the screen.
 use, so a typo costs one key, not the splash. `DEFAULTS` is the single source of
 truth for both runtime and `/splash status`.
 
-`image.height: "auto"` needs the artwork's aspect ratio; `probeSourceSize()`
-(ffprobe) resolves it once per build and `applySourceSize()` derives the height
-(a character cell is roughly twice as tall as it is wide).
+The canvas is derived, never configured: `derivedCanvas()` splits `layout.width`
+into two equal columns around `layout.gap`, and `applySourceSize()` recomputes the
+height from the artwork's aspect ratio (a character cell is roughly twice as tall
+as it is wide) once per build, via `probeSourceSize()` (ffprobe).
 
 ## 7. Cache
 
@@ -151,7 +153,6 @@ against pi-tui's own implementation when it can be resolved.
 | Project | Licence | Relation |
 | --- | --- | --- |
 | [beautiful-pi](https://github.com/danielmrdev/beautiful-pi) | MIT | Inspiration for a `setHeader` splash with a `RESOURCES` box. No code copied; the box drawing and `distributeLines()` are independent. |
-| [pi-splash](https://github.com/mavam/pi-splash) | MIT | Reference for document-flow scrolling, `unref()` timers, narrow-terminal fallback. No code copied. |
 | [chafa](https://hpjansson.org/chafa/) | LGPL-3.0 | External binary; renders the art. |
 | [ffmpeg](https://ffmpeg.org/) | LGPL/GPL | External binary; extracts frames, probes timing and size. |
 | [`@earendil-works/pi-tui`](https://github.com/earendil-works/pi) | MIT | Peer dependency: width tables and the component contract. |

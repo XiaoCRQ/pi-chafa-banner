@@ -1,6 +1,6 @@
 {
 	"name": "pi-chafa-banner",
-	"version": "3.0.0",
+	"version": "1.0.0",
 	"description": "Animated chafa splash header for pi: gif art top-left, model info below, skills/themes/extensions on the right",
 	"type": "module",
 	"private": false,

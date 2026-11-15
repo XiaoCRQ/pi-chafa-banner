@@ -315,13 +315,11 @@ async function main(): Promise<void> {
 	if (args.gif) config.gifPath = args.gif;
 	if (args.size) {
 		config.size = parseSize(args.size, config.size);
-		// An explicit canvas is explicit: do not derive it from the artwork.
-		config.heightAuto = false;
 	}
 	if (args.fps !== undefined) config.fps = args.fps;
 	if (args.chafa !== undefined) config.chafaArgs = parseChafaArgs(args.chafa);
 	if (args.static) config.static = true;
-	if (config.heightAuto && config.gifPath) {
+	if (!args.size && config.gifPath) {
 		try {
 			Object.assign(config, applySourceSize(config, await probeSourceSize(config.gifPath)));
 		} catch {

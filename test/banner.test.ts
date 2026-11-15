@@ -184,7 +184,7 @@ describe("Banner animation controls", () => {
 
 	test("statusLine summarizes the state", () => {
 		const { banner } = makeBanner({ frames: frames() });
-		expect(banner.statusLine()).toContain("size=44x22");
+		expect(banner.statusLine()).toContain("size=43x22");
 		expect(banner.statusLine()).toContain("frames=3/3");
 		banner.dispose();
 	});

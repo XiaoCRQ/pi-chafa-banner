@@ -22,27 +22,6 @@
           "description": "Gif to animate. Absolute, or relative to the directory holding this file. '~' is expanded. Default: ~/Pictures/logo/v-3.gif, then the bundled assets/banner.gif.",
           "type": "string"
         },
-        "width": {
-          "description": "Width of the whole splash block, in terminal columns.",
-          "type": "integer",
-          "minimum": 8,
-          "maximum": 160,
-          "default": 44
-        },
-        "height": {
-          "description": "Height of the image, in terminal rows. 'auto' derives it from the width and the gif's aspect ratio.",
-          "oneOf": [
-            {
-              "type": "integer",
-              "minimum": 4,
-              "maximum": 60
-            },
-            {
-              "const": "auto"
-            }
-          ],
-          "default": "auto"
-        },
         "fps": {
           "description": "\"auto\" plays the gif at its own per-frame delays (recommended). A number forces a fixed rate, which makes a stride-sampled gif look accelerated.",
           "oneOf": [
@@ -77,18 +56,18 @@
       "additionalProperties": true,
       "properties": {
         "width": {
-          "description": "Preferred total width of the splash block, in columns. Capped by the terminal and by maxWidth.",
+          "description": "Preferred total width of the splash block, in columns. Capped by the terminal and by maxWidth. Each of the two columns, and the chafa canvas, gets half of it minus the gap.",
           "type": "integer",
           "minimum": 24,
           "maximum": 200,
           "default": 88
         },
         "gap": {
-          "description": "Blank columns between the two columns of the lower block.",
+          "description": "Blank columns between the art/info column and the resource panel. The remaining width splits into two equal columns.",
           "type": "integer",
           "minimum": 0,
           "maximum": 12,
-          "default": 4
+          "default": 2
         },
         "twoColumnMinWidth": {
           "description": "Below this width the lower block stacks instead of splitting into two panels.",

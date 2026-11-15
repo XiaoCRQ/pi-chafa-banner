@@ -52,13 +52,11 @@ bun run scripts/preview.ts --width 60         # 窄终端，上下堆叠
 {
   "image": {
     "path": "~/Pictures/logo/v-3.gif",
-    "width": 44,
-    "height": "auto",
     "fps": "auto",
     "stride": 3,
     "chafa": "--symbols block"
   },
-  "layout": { "width": 88, "gap": 4 },
+  "layout": { "width": 88, "gap": 2 },
   "panels": { "info": { "fields": ["version", "model", "theme"] } }
 }
 ```
@@ -66,14 +64,14 @@ bun run scripts/preview.ts --width 60         # 窄终端，上下堆叠
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
 | `image.path` | `~/Pictures/logo/v-3.gif`，找不到用包内图 | 要播放的 GIF（展开 `~`） |
-| `image.width` / `image.height` | `44` / `"auto"` | 图片尺寸（字符格）；`"auto"` 按 GIF 宽高比推算高度 |
 | `image.fps` / `image.stride` | `"auto"` / `3` | `"auto"` = 用 GIF 自己的每帧延时；`stride` = 每 N 帧取 1 帧 |
 | `image.chafa` | `""` | 额外的 chafa 参数，一个字符串，如 `"--symbols block -c 16"` |
-| `layout.width` / `layout.gap` | `88` / `4` | 整体宽度、两列之间的空隙 |
+| `layout.width` / `layout.gap` | `88` / `2` | 整体宽度；两列等分，字符画尺寸由它推导 |
 | `layout.twoColumnMinWidth` / `compactMinWidth` | `76` / `32` | 低于前者改为上下堆叠，低于后者退化成三行 |
 | `panels.info.enabled` / `.fields` | `true` / version, model, theme | 还可选 `gif`、`frames` |
 | `panels.resources.enabled` / `.sections` | `true` / 四项全开 | `context`、`skills`、`themes`、`extensions` |
-| `panels.resources.width` / `.height` / `.maxLinesPerSection` | `"auto"` / `"auto"` / `6` | 面板尺寸 |
+| `panels.resources.maxLinesPerSection` | `6` | 每个分类最多显示几行，超出用 `…` |
+| `panels.resources.width` / `.height` | `"auto"` / `"auto"` | 双栏时忽略：面板宽度恒等于图片列宽度 |
 | `behavior.enabled` / `.static` / `.hidePiResourceList` | `true` / `false` / `true` | 总开关、冻结成静图、隐藏 pi 自带的资源列表 |
 
 `image.chafa` 里的 `--probe`、`--animate`、`--clear` 会被丢弃：第一个会让 chafa
@@ -94,8 +92,6 @@ bun run scripts/preview.ts --width 60         # 窄终端，上下堆叠
 
 - [beautiful-pi](https://github.com/danielmrdev/beautiful-pi)（MIT）：`setHeader`
   双栏 + `RESOURCES` 面板的灵感来源，未复制代码。
-- [pi-splash](https://github.com/mavam/pi-splash)（MIT）：滚动行为、`unref()` 定时器、
-  窄终端降级的参考，未复制代码。
 - [chafa](https://hpjansson.org/chafa/) 负责渲染字符画，`ffmpeg` 负责抽帧，
   [`@earendil-works/pi-tui`](https://github.com/earendil-works/pi) 提供排版所用的宽度表。
 

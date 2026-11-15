@@ -26,11 +26,16 @@ export function splashRows(terminalRows: number): number {
 }
 
 /**
- * Width of the whole splash block: the configured width, capped by the terminal
- * (four columns of breathing room) and by `layout.maxWidth`.
+ * Width of the whole splash block: the configured width, capped by `layout.maxWidth`.
+ *
+ * When the terminal is at least as wide as the ceiling the block is exactly that
+ * wide — the canvas is derived from the same number (`derivedCanvas(layout)`), so
+ * the artwork fills its column column-for-column. Narrower terminals keep four
+ * columns of breathing room and the art is clipped to fit.
  */
 export function blockWidthFor(cols: number, layout?: LayoutSettings): number {
 	const width = Math.floor(cols);
 	const ceiling = layout ? Math.min(layout.maxWidth, layout.width) : BANNER_MAX_WIDTH;
-	return Math.min(Math.max(20, width - 4), ceiling);
+	const available = width >= ceiling ? ceiling : Math.max(20, width - 4);
+	return Math.min(available, ceiling);
 }

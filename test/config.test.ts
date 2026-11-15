@@ -34,6 +34,7 @@ describe("config: file discovery", () => {
 		const config = load(undefined);
 		expect(config.size).toEqual(DEFAULTS.size);
 		expect(config.fps).toBe(DEFAULTS.fps);
+		expect(config.stride).toBe(DEFAULTS.stride);
 		expect(config.source.path).toBeUndefined();
 		expect(config.source.warnings).toEqual([]);
 		expect(describeConfigSource(config)).toContain("built-in defaults");
@@ -45,15 +46,15 @@ describe("config: reading values", () => {
 		const config = load(
 			JSON.stringify({
 				version: 1,
-				image: { path: "/art/cat.gif", width: 60, height: 18, fps: 12, stride: 2, chafa: "--symbols block" },
+				image: { path: "/art/cat.gif", fps: 12, stride: 2, chafa: "--symbols block" },
 				layout: { width: 100, gap: 6, lowerRows: 14 },
 				panels: { info: { enabled: false, fields: ["model"] }, resources: { sections: ["skills"], maxLinesPerSection: 3 } },
 				behavior: { static: true, hidePiResourceList: false },
 			}),
 		);
 		expect(config.gifPath).toBe("/art/cat.gif");
-		expect(config.size).toEqual({ width: 60, height: 18 });
-		expect(config.heightAuto).toBe(false);
+		// Two equal columns: (100 - 6) / 2 = 47 wide, 24 rows before the gif is probed.
+		expect(config.size).toEqual({ width: 47, height: autoHeightFor(47) });
 		expect(config.fps).toBe(12);
 		expect(config.stride).toBe(2);
 		expect(config.chafaArgs).toEqual(["--symbols", "block"]);
@@ -67,9 +68,10 @@ describe("config: reading values", () => {
 	});
 
 	it("keeps defaults for keys the file omits", () => {
-		const config = load(JSON.stringify({ image: { width: 50 } }));
-		expect(config.size.width).toBe(50);
-		expect(config.fps).toBe(DEFAULTS.fps);
+		const config = load(JSON.stringify({ image: { fps: 12 } }));
+		expect(config.size).toEqual(DEFAULTS.size);
+		expect(config.fps).toBe(12);
+		expect(config.stride).toBe(DEFAULTS.stride);
 		expect(config.layout).toEqual(DEFAULTS.layout);
 		expect(config.panels).toEqual(DEFAULTS.panels);
 	});
@@ -81,30 +83,39 @@ describe("config: reading values", () => {
 	});
 
 	it("describes itself for /splash status", () => {
-		const text = describeConfig(load(JSON.stringify({ image: { width: 50, height: 25 } })));
-		expect(text).toContain("image=50x25");
-		expect(text).toContain("layout=88");
+		const text = describeConfig(load(JSON.stringify({ layout: { width: 102, gap: 2 } })));
+		expect(text).toContain("image=50x25 (derived)");
+		expect(text).toContain("gap=2");
+		expect(text).toContain("layout=102");
 	});
 });
 
-describe("config: auto height", () => {
-	it("derives the height from the width when height is auto", () => {
-		const config = load(JSON.stringify({ image: { width: 60 } }));
-		expect(config.heightAuto).toBe(true);
-		expect(config.size.height).toBe(autoHeightFor(60));
+describe("config: derived canvas", () => {
+	it("splits the layout width into two equal columns", () => {
+		const config = load(JSON.stringify({ layout: { width: 100, gap: 4 } }));
+		expect(config.size.width).toBe(48);
+		expect(config.size.height).toBe(autoHeightFor(48));
+		expect(DEFAULTS.size).toEqual({ width: 43, height: 22 });
 	});
 
 	it("refines the height from the artwork aspect ratio", () => {
-		const config = load(JSON.stringify({ image: { width: 40 } }));
+		const config = load(JSON.stringify({ layout: { width: 82, gap: 2 } }));
+		expect(config.size.width).toBe(40);
 		const square = applySourceSize(config, { width: 500, height: 500 });
 		expect(square.size.height).toBe(20);
 		const wide = applySourceSize(config, { width: 1000, height: 250 });
 		expect(wide.size.height).toBe(5);
 	});
 
-	it("never overrides an explicit height", () => {
-		const config = load(JSON.stringify({ image: { width: 40, height: 30 } }));
-		expect(applySourceSize(config, { width: 1000, height: 250 })).toBe(config);
+	it("keeps the derived height when the aspect ratio already matches", () => {
+		const config = load(JSON.stringify({ layout: { width: 82, gap: 2 } }));
+		expect(applySourceSize(config, { width: 1000, height: 1000 })).toBe(config);
+	});
+
+	it("ignores width and height inside image: the canvas is derived", () => {
+		const config = load(JSON.stringify({ image: { width: 20, height: 5 } }));
+		expect(config.size).toEqual(DEFAULTS.size);
+		expect(config.source.warnings).toEqual([]);
 	});
 });
 
@@ -119,16 +130,14 @@ describe("config: tolerance", () => {
 	it("drops only the offending fields", () => {
 		const config = load(
 			JSON.stringify({
-				image: { width: "wide", fps: 100, chafa: 42, height: "tall" },
+				image: { fps: 100, chafa: 42 },
 				layout: { gap: true },
 			}),
 		);
 		expect(config.size.width).toBe(DEFAULTS.size.width);
 		expect(config.fps).toBe(30); // clamped, not dropped
 		expect(config.chafaArgs).toEqual([]);
-		expect(config.heightAuto).toBe(true);
 		expect(config.layout.gap).toBe(DEFAULTS.layout.gap);
-		expect(config.source.warnings.join("\n")).toContain("image.width");
 		expect(config.source.warnings.join("\n")).toContain("image.chafa");
 		expect(config.source.warnings.join("\n")).toContain("layout.gap");
 	});
@@ -146,14 +155,14 @@ describe("config: tolerance", () => {
 	});
 
 	it("warns but still reads a file with an unexpected version", () => {
-		const config = load(JSON.stringify({ version: 2, image: { width: 52 } }));
-		expect(config.size.width).toBe(52);
+		const config = load(JSON.stringify({ version: 2, layout: { width: 102 } }));
+		expect(config.size.width).toBe(50);
 		expect(config.source.warnings.join("\n")).toContain("version");
 	});
 
 	it("treats a non-object root as defaults", () => {
 		const settings = validateSettings([1, 2, 3]);
-		expect(settings.image.width).toBe(DEFAULTS.size.width);
+		expect(settings.layout.width).toBe(DEFAULTS.layout.width);
 		expect(settings.warnings.join("\n")).toContain("root");
 	});
 

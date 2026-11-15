@@ -136,10 +136,12 @@ assets/banner.gif（或 image.path）
 
 ## 6. 尺寸与布局阈值
 
-- 块宽 `blockWidthFor(cols, layout) = min(max(20, cols-4), min(layout.maxWidth, layout.width))`，默认 88、上限 108。
-- 左列宽由图片宽度驱动：`left = max(min(max(art||40,32), block), min(art, block))`；
-  `right = block - left - layout.gap`。
-- 双列条件：`block >= layout.twoColumnMinWidth`（默认 76）且 `right >= MIN_PANEL_WIDTH`（28）。
+- 块宽 `blockWidthFor(cols, layout)`：`ceiling = min(layout.maxWidth, layout.width)`（默认 88、上限 108）；
+  `cols >= ceiling` 时直接取 `ceiling`（画布因此逐列对齐），否则取 `max(20, cols-4)` 留 4 列余量。
+- 两列恒等宽：`column = columnWidthFor(block, layout.gap) = floor((block - gap) / 2)`，
+  左右都用 `column`；chafa 画布就是 `column × autoHeightFor(column)`（高度再按 gif
+  宽高比重算），所以**图片尺寸没有任何配置项，全由 `layout.width`/`gap` 推导**。
+- 双列条件：`block >= layout.twoColumnMinWidth`（默认 76）且 `column >= MIN_PANEL_WIDTH`（28）。
 - 低于 `layout.compactMinWidth`（32）退化成 3 行 `compactSplash()`。
 - 可用行数 `splashRows(rows) = max(10, rows - CHROME_ROWS)`，`CHROME_ROWS = 7`
   （editor 3 + footer 2 + header 上下各一个 Spacer）。`imageBudget()` 从这份预算里
@@ -153,10 +155,10 @@ assets/banner.gif（或 image.path）
 
 | 组 | 键（默认） |
 | --- | --- |
-| image | `path`（`~/Pictures/logo/v-3.gif` → 包内图）、`width` 44、`height` `"auto"`、`fps` `"auto"`、`stride` 3、`chafa` `""` |
-| layout | `width` 88、`gap` 4、`twoColumnMinWidth` 76、`compactMinWidth` 32、`maxWidth` 108、`lowerRows` 12 |
+| image | `path`（`~/Pictures/logo/v-3.gif` → 包内图）、`fps` `"auto"`、`stride` 3、`chafa` `""` |
+| layout | `width` 88、`gap` 2、`twoColumnMinWidth` 76、`compactMinWidth` 32、`maxWidth` 108、`lowerRows` 12 |
 | panels.info | `enabled` true、`fields` `["version","model","theme"]`（可选 `gif`/`frames`） |
-| panels.resources | `enabled` true、`sections` 全部、`width`/`height` `"auto"`、`maxLinesPerSection` 6 |
+| panels.resources | `enabled` true、`sections` 全部、`maxLinesPerSection` 6（`width`/`height` 仅堆叠时用） |
 | behavior | `enabled` true、`static` false、`hidePiResourceList` true |
 
 宽容策略：缺文件/缺键 → 默认值；类型或枚举错 → 默认值 + `source.warnings`；
@@ -193,8 +195,8 @@ assets/banner.gif（或 image.path）
 
 - **换默认图**：改 `~/Pictures/logo/v-3.gif` 的内容，或设 `image.path`，或覆盖
   `assets/banner.gif`（缓存按 mtime 失效，无需清缓存）。
-- **换画布尺寸/宽高比**：改 `image.width`（`height: "auto"` 会自动跟）；
-  然后检查左列宽与 `INFO_BOX_ROWS` 是否仍成立。
+- **换画布尺寸/宽高比**：改 `layout.width`（两列与画布一起变，高度按 gif 宽高比
+  自动推算，下限 4 行、上限 60 行）；然后确认 `INFO_BOX_ROWS` 是否仍成立。
 - **改边框/配色**：只动 `src/layout/box.ts` 的 `THIN_BOX` 与 `themePainter()` 的
   token 映射；不要硬编码 RGB，主题切换要跟着变。
 - **加资源区块**：`src/banner/panels.ts sections()` + `src/resources.ts collectResources()`
@@ -202,13 +204,12 @@ assets/banner.gif（或 image.path）
 - **改动画节奏**：`src/banner/component.ts` 的 `frameDelay()`/`scheduleTick()`、
   `src/frames.ts` 的 stride 与 `src/pipeline/timing.ts` 的聚合；保持 `unref()` 与
   暂停/恢复逻辑。
-- **调性能**：`image.stride`（少渲染）、`image.width/height`（小画布）、
+- **调性能**：`image.stride`（少渲染）、`layout.width`（小画布）、
   `image.chafa`（例如 `--symbols block` 让每格用一个全块字符）。
 
 ## 10. 外部参考
 
 - `https://github.com/danielmrdev/beautiful-pi` —— 同为 setHeader splash、
   `╭─ RESOURCES ─╮` 面板的画法（灵感，无代码）。
-- `https://github.com/mavam/pi-splash` —— 滚动行为、`unref()` 定时器、窄终端处理（灵感，无代码）。
 - pi 文档：`/usr/lib/node_modules/pi/packages/coding-agent/docs/{extensions,tui,packages,cli}.md`；
   组件契约看 `packages/tui/dist/tui.d.ts`。

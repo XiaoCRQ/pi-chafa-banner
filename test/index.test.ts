@@ -222,7 +222,7 @@ describe("/splash commands", () => {
 		await runCommand(host, "status");
 		const status = host.notices.map((notice) => notice.message).join("\n");
 		expect(status).toContain("config");
-		expect(status).toContain("image=44x22");
+		expect(status).toContain("image=43x22 (derived)");
 		expect(status).toContain("source  built-in defaults");
 	});
 

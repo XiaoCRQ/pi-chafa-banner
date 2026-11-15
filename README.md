@@ -53,13 +53,11 @@ A missing file, a missing key or a bad value falls back to that key's default;
 {
   "image": {
     "path": "~/Pictures/logo/v-3.gif",
-    "width": 44,
-    "height": "auto",
     "fps": "auto",
     "stride": 3,
     "chafa": "--symbols block"
   },
-  "layout": { "width": 88, "gap": 4 },
+  "layout": { "width": 88, "gap": 2 },
   "panels": { "info": { "fields": ["version", "model", "theme"] } }
 }
 ```
@@ -67,14 +65,14 @@ A missing file, a missing key or a bad value falls back to that key's default;
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `image.path` | `~/Pictures/logo/v-3.gif`, else the bundled artwork | GIF to animate (`~` expands) |
-| `image.width` / `image.height` | `44` / `"auto"` | Art size in cells; `"auto"` follows the gif's aspect ratio |
 | `image.fps` / `image.stride` | `"auto"` / `3` | `"auto"` = the gif's own frame delays; `stride` keeps every Nth frame |
 | `image.chafa` | `""` | Extra chafa flags as one string, e.g. `"--symbols block -c 16"` |
-| `layout.width` / `layout.gap` | `88` / `4` | Total splash width, and the gap between the columns |
+| `layout.width` / `layout.gap` | `88` / `2` | Total splash width; the two columns split it evenly and the art canvas is derived from that |
 | `layout.twoColumnMinWidth` / `compactMinWidth` | `76` / `32` | Below these the panels stack, then collapse to three lines |
 | `panels.info.enabled` / `.fields` | `true` / version, model, theme | Also `gif`, `frames` |
 | `panels.resources.enabled` / `.sections` | `true` / all four | `context`, `skills`, `themes`, `extensions` |
-| `panels.resources.width` / `.height` / `.maxLinesPerSection` | `"auto"` / `"auto"` / `6` | Panel sizing |
+| `panels.resources.maxLinesPerSection` | `6` | Cap per section before `…` |
+| `panels.resources.width` / `.height` | `"auto"` / `"auto"` | Ignored in the two-column layout: the panel is exactly as wide as the art column |
 | `behavior.enabled` / `.static` / `.hidePiResourceList` | `true` / `false` / `true` | Master switch, freeze on one frame, drop pi's own listing |
 
 `--probe`, `--animate` and `--clear` are dropped from `image.chafa`: the first
@@ -94,10 +92,8 @@ key for editor autocompletion.
 
 ## Credits
 
-- [beautiful-pi](https://github.com/danielmrdev/beautiful-pi) (MIT): the idea of a
-  `setHeader` splash with a `RESOURCES` box. No code copied.
-- [pi-splash](https://github.com/mavam/pi-splash) (MIT): scrolling behaviour,
-  `unref()` timers, narrow-terminal fallback. No code copied.
+- [beautiful-pi](https://github.com/danielmrdev/beautiful-pi) (MIT): the
+  inspiration for a `setHeader` splash with a `RESOURCES` box. No code copied.
 - [chafa](https://hpjansson.org/chafa/) renders the art, `ffmpeg` extracts frames,
   and [`@earendil-works/pi-tui`](https://github.com/earendil-works/pi) supplies the
   width tables the layout is measured with.
