@@ -1,8 +1,8 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { BUNDLED_GIF_PATH, DEFAULTS, type BannerConfig } from "../src/config.ts";
 import {
 	cacheRoot,
@@ -35,6 +35,19 @@ describe("stripChafaControl", () => {
 	test("drops carriage returns", () => {
 		expect(stripChafaControl("a\r\nb")).toBe("a\nb");
 	});
+
+	test("drops alt-screen and absolute cursor moves", () => {
+		const raw = [
+			`${ESC}[?1049h`, // enter alternate screen
+			`${ESC}[12;3H`, // absolute cursor move
+			"hello",
+			`${ESC}[?1049l`,
+		].join("");
+		const cleaned = stripChafaControl(raw);
+		expect(cleaned).toBe("hello");
+		expect(cleaned).not.toContain(`${ESC}[?1049`);
+		expect(cleaned).not.toContain(`${ESC}[12;3H`);
+	});
 });
 
 describe("sanitizeFrame", () => {
@@ -43,6 +56,11 @@ describe("sanitizeFrame", () => {
 		expect(frame.length).toBe(4);
 		expect(frame.map((line) => visibleWidth(line))).toEqual([3, 3, 3, 3]);
 		expect(frame[1]).toBe("bbb");
+	});
+
+	test("strips control sequences inside cells", () => {
+		const frame = sanitizeFrame(`${ESC}[?25l${"x".repeat(20)}${ESC}[2J`, 4, 2);
+		expect(frame).toEqual(["xxxx", "    "]);
 	});
 
 	test("keeps colors while padding", () => {
@@ -106,6 +124,50 @@ describe("cache paths", () => {
 	test("clearCache is a no-op without a gif", async () => {
 		const config: BannerConfig = { ...DEFAULTS, gifPath: undefined, enabled: true, renderer: "auto", static: false };
 		expect(await clearCache(config, "truecolor")).toBe(false);
+	});
+});
+
+describe("frame cache key freshness", () => {
+	// The key must follow the gif *content* (path+mtime+size), not its name:
+	// editing the artwork in place has to invalidate the cached frames.
+	let root = "";
+	let gif = "";
+	let previousAgentDir: string | undefined;
+
+	beforeAll(async () => {
+		root = await mkdtemp(join(tmpdir(), "pi-chafa-frames-"));
+		gif = join(root, "banner.gif");
+		await writeFile(gif, Buffer.from("GIF89a-fake-but-stable"));
+		previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+		process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+	});
+
+	afterAll(async () => {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		await rm(root, { recursive: true, force: true });
+	});
+
+	test("changes when the gif mtime changes", async () => {
+		await utimes(gif, new Date(1_600_000_000), new Date(1_600_000_000));
+		const before = await gifHash(gif);
+		await utimes(gif, new Date(1_600_000_100), new Date(1_600_000_100));
+		expect(await gifHash(gif)).not.toBe(before);
+	});
+
+	test("changes with the canvas size and the color mode", async () => {
+		const small = await frameCachePath(gif, { width: 44, height: 22 }, "truecolor");
+		const large = await frameCachePath(gif, { width: 60, height: 30 }, "truecolor");
+		const ansi = await frameCachePath(gif, { width: 44, height: 22 }, "256color");
+		expect(large).not.toBe(small);
+		expect(ansi).not.toBe(small);
+		expect(small).toContain("frames-44x22-truecolor.json");
+	});
+
+	test("is stable for an unchanged gif", async () => {
+		const first = await frameCachePath(gif, { width: 44, height: 22 }, "truecolor");
+		const again = await frameCachePath(gif, { width: 44, height: 22 }, "truecolor");
+		expect(again).toBe(first);
 	});
 });
 
