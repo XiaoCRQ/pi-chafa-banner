@@ -21,7 +21,6 @@ import { handleSplashCommand, SUBCOMMANDS } from "./extension/commands.ts";
 import { refreshResources, bootstrap } from "./extension/session.ts";
 import { errorText, session } from "./extension/state.ts";
 
-export { resolveRenderer } from "./extension/state.ts";
 export { describeConfig, loadConfig, loadSessionConfig, setConfigLoader } from "./config.ts";
 
 export default function piChafaBanner(pi: ExtensionAPI): void {

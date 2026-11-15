@@ -13,7 +13,7 @@ import { stat } from "node:fs/promises";
 /** Any pipeline failure; `code` lets callers shape the user-facing notice. */
 export class FrameError extends Error {
 	constructor(
-		readonly code: "no-gif" | "missing-tool" | "ffmpeg" | "chafa" | "empty" | "image",
+		readonly code: "no-gif" | "missing-tool" | "ffmpeg" | "ffprobe" | "chafa" | "empty",
 		message: string,
 	) {
 		super(message);
@@ -77,16 +77,6 @@ export function run(command: string, args: string[], timeoutMs = 20_000): Promis
 	});
 }
 
-/**
- * Split the preflight result by what a renderer actually needs: the char
- * renderer drives chafa *and* ffmpeg, the kitty renderer only needs ffmpeg (the
- * PNGs are encoded, never rasterized into cells).
- */
-export function missingToolsFor(result: PreflightResult, need: "chars" | "kitty"): string[] {
-	const required = need === "kitty" ? ["ffmpeg"] : ["chafa", "ffmpeg"];
-	return required.filter((bin) => result.missing.includes(bin));
-}
-
 export interface PreflightResult {
 	ok: boolean;
 	missing: string[];
@@ -132,4 +122,47 @@ export async function gifHash(gifPath: string): Promise<string> {
 	}
 	if (!info.isFile()) throw new FrameError("no-gif", `not a file: ${gifPath}`);
 	return createHash("sha1").update(`${gifPath}\0${info.mtimeMs}\0${info.size}`).digest("hex");
+}
+
+// ---------------------------------------------------------------------------
+// artwork probing
+// ---------------------------------------------------------------------------
+
+export interface SourceSize {
+	width: number;
+	height: number;
+}
+
+/**
+ * Pixel size of the artwork's first frame.
+ *
+ * Needed for `image.height: "auto"`: chafa wants a cell grid, and the only way
+ * to keep the gif's aspect ratio is to know the source's.
+ */
+export async function probeSourceSize(gifPath: string, timeoutMs = 10_000): Promise<SourceSize> {
+	let stdout: string;
+	try {
+		({ stdout } = await run(
+			"ffprobe",
+			[
+				"-v",
+				"error",
+				"-select_streams",
+				"v:0",
+				"-show_entries",
+				"stream=width,height",
+				"-of",
+				"csv=p=0:s=x",
+				gifPath,
+			],
+			timeoutMs,
+		));
+	} catch (error) {
+		throw new FrameError("ffprobe", `ffprobe could not read ${gifPath}: ${(error as Error)?.message ?? error}`);
+	}
+	const [width, height] = (stdout.trim().split("\n")[0] ?? "").split("x").map(Number);
+	if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+		throw new FrameError("ffprobe", `could not read the size of ${gifPath}`);
+	}
+	return { width: width as number, height: height as number };
 }

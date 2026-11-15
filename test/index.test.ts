@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import piChafaBanner, { resolveRenderer } from "../src/index.ts";
+import piChafaBanner from "../src/index.ts";
 import type {
 	Component,
 	ExtensionAPI,
@@ -288,69 +288,18 @@ describe("/splash commands", () => {
 	});
 });
 
-describe("resolveRenderer", () => {
-	const config = (renderer: BannerConfig["renderer"]): BannerConfig => ({
-		...DEFAULTS,
-		renderer,
-		gifPath: "/tmp/x.gif",
-		enabled: true,
-		static: false,
-	});
-
-	test("chars is always chars and never complains", () => {
-		expect(resolveRenderer(config("chars"), { images: "kitty" })).toEqual({ renderer: "chars" });
-	});
-
-	test("auto upgrades to kitty only when the terminal speaks it", () => {
-		expect(resolveRenderer(config("auto"), { images: "kitty" })).toEqual({ renderer: "kitty" });
-		expect(resolveRenderer(config("auto"), { images: "iterm2" })).toEqual({ renderer: "chars" });
-		expect(resolveRenderer(config("auto"), { images: null })).toEqual({ renderer: "chars" });
-		expect(resolveRenderer(config("auto"), undefined)).toEqual({ renderer: "chars" });
-	});
-
-	test("an explicit kitty request explains why it fell back", () => {
-		expect(resolveRenderer(config("kitty"), { images: "kitty" })).toEqual({ renderer: "kitty" });
-		const none = resolveRenderer(config("kitty"), { images: null });
-		expect(none.renderer).toBe("chars");
-		expect(none.notice).toContain("no inline image protocol");
-		const iterm = resolveRenderer(config("kitty"), { images: "iterm2" });
-		expect(iterm.renderer).toBe("chars");
-		expect(iterm.notice).toContain("iTerm2");
-	});
-});
-
-describe("image mode wiring", () => {
-	test("status always reports an image line", async () => {
-		const host = makeHost();
-		piChafaBanner(host.pi);
-		await host.fire("session_start", { type: "session_start", reason: "startup" });
-		await runCommand(host, "status");
-		const status = host.notices.map((notice) => notice.message).join("\n");
-		expect(status).toContain("image ");
-		// pi-tui is not resolvable inside this repo, so the probe finds nothing
-		// and the chars renderer is chosen without a notice.
-		expect(status).toContain("image   off (renderer=chars)");
-	});
-
-	test("a terminal without kitty support renders characters and keeps working", async () => {
+describe("char mode", () => {
+	test("the header renders characters and never emits graphics escapes", async () => {
 		const host = makeHost();
 		piChafaBanner(host.pi);
 		await host.fire("session_start", { type: "session_start", reason: "startup" });
 		await new Promise((resolve) => setTimeout(resolve, 30));
 		const lines = host.render(100);
 		expect(lines.length).toBeGreaterThan(0);
-		for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(100);
-	});
-
-	test('image.renderer = "kitty" without protocol support falls back with one notice', async () => {
-		setConfigLoader(() => ({ ...DEFAULTS, renderer: "kitty" }));
-		const host = makeHost();
-		piChafaBanner(host.pi);
-		await host.fire("session_start", { type: "session_start", reason: "startup" });
-		const messages = host.notices.map((notice) => notice.message);
-		expect(messages.some((message) => message.includes("no inline image protocol"))).toBe(true);
-		expect(messages.filter((message) => message.includes("no inline image protocol")).length).toBe(1);
-		const lines = host.render(100);
-		expect(lines.some((line) => line.includes("\x1b_G"))).toBe(false);
+		for (const line of lines) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(100);
+			expect(line).not.toContain("\x1b_G");
+			expect(line).not.toContain("\x1b]1337");
+		}
 	});
 });

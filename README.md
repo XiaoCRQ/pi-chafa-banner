@@ -1,85 +1,86 @@
 # pi-chafa-banner
 
-An animated splash for [pi](https://github.com/earendil-works/pi)'s startup header:
-your GIF on the left, model/context/skills on the right. It renders as character
-art through [chafa](https://hpjansson.org/chafa/), and as the *actual picture* on
-terminals that speak the kitty graphics protocol.
+An animated splash in [pi](https://github.com/earendil-works/pi)'s startup header:
+your GIF rendered as character art by [chafa](https://hpjansson.org/chafa/), with
+the coding-agent card under it and a resource panel on the right.
 
 ```
-╭──────────────── (pi) CODING AGENT ────────────────╮╭──────────────── RESOURCES ────────────────╮
-│ version  2.0.0                                    ││ [Context]                                 │
-│ model    claude-sonnet-4.5                        ││   ~/work/app/AGENTS.md                    │
-│ theme    system/dark                              ││ [Skills]                                  │
-╰───────────────────────────────────────────────────╯╰───────────────────────────────────────────╯
+        ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄         ╭──────────── RESOURCES ────────────╮
+        ███ the gif, rendered by chafa ███         │ [Context]                        │
+        ███ one frame at a time ██████████         │   ~/work/app/AGENTS.md           │
+        ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀         │ [Skills]                         │
+       ╭──────── (pi) CODING AGENT ────────╮        │   workflow-authoring             │
+       │ version  3.0.0                    │        │ [Extensions]                     │
+       │ model    claude-sonnet-4.5        │        │   pi-chafa-banner                │
+       ╰───────────────────────────────────╯        ╰──────────────────────────────────╯
 ```
 
-The splash is installed with `ctx.ui.setHeader()`, so it sits at the top of the
-transcript and scrolls away with the conversation — it never takes input, never
-covers the editor, and disappears with `pi`'s own header when the session ends.
+The splash is installed with `ctx.ui.setHeader()`, so it is part of the document:
+it scrolls away with the conversation, never takes input and never covers the
+editor. `/splash off` restores pi's own header.
 
 ## Quick start
 
 ```bash
-cd ~/.pi/agent                       # where pi looks for packages
-git clone <this-repo> pi-chafa-banner
-# add the extension to your pi settings:
-#   { "extensions": ["~/.pi/agent/pi-chafa-banner/src/index.ts"] }
-
-pi                                    # start pi: the splash is in the header
+cd ~/.pi/agent
+git clone <this-repo> pi-chafa-banner        # or: pi install <package>
 ```
 
-Requirements: `ffmpeg` for both renderers, plus `chafa` if you are not on a kitty
-terminal (`/splash status` prints what was found). A terminal that supports the
-kitty graphics protocol (kitty, Ghostty, WezTerm, Konsole…) gets the native image;
-everything else gets the chafa rendering.
+Then add it to your pi settings:
 
-Without any configuration the bundled artwork (`assets/banner.gif`) is used. To
-preview the layout without starting pi:
+```json
+{ "extensions": ["~/.pi/agent/pi-chafa-banner/src/index.ts"] }
+```
+
+Requirements: `chafa` and `ffmpeg` on `PATH` (`/splash status` prints what was
+found). Without a config file the bundled artwork is used.
+
+Preview the layout without starting pi:
 
 ```bash
-bun run scripts/preview.ts --width 100            # character art
-bun run scripts/preview.ts --image --width 100    # picture band layout
+bun run scripts/preview.ts --width 100        # characters, colors on
+bun run scripts/preview.ts --width 60         # narrow, stacked layout
 ```
 
 ## Configuration
 
-Create `pi-chafa-banner.json` **next to the extension** (i.e. in the directory
-where the plugin is installed — `~/.pi/agent/` for a global install, `<project>/.pi/`
-for a project one). No file, no key, or a bad value simply falls back to the
-default for that key; a warning is shown in `/splash status`.
+`pi-chafa-banner.json`, next to the extension itself — `~/.pi/agent/pi-chafa-banner.json`
+for a global install, `<project>/.pi/pi-chafa-banner.json` for a project one.
+A missing file, a missing key or a bad value falls back to that key's default;
+`/splash status` lists the warnings.
 
 ```json
 {
-  "version": 1,
   "image": {
     "path": "~/Pictures/logo/v-3.gif",
     "width": 44,
     "height": "auto",
-    "renderer": "auto"
+    "fps": "auto",
+    "stride": 3,
+    "chafa": "--symbols block"
   },
-  "panels": {
-    "info": { "fields": ["version", "model", "theme"] },
-    "resources": { "sections": ["context", "skills", "extensions"] }
-  }
+  "layout": { "width": 88, "gap": 4 },
+  "panels": { "info": { "fields": ["version", "model", "theme"] } }
 }
 ```
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `image.path` | bundled artwork | GIF to animate (`~` is expanded) |
-| `image.width` / `image.height` | `44` / `"auto"` | Art size in cells; `"auto"` keeps the GIF's aspect ratio |
-| `image.fps` / `image.stride` | `"auto"` / `3` | Playback rate (`"auto"` = the gif's own delays), and "use every Nth frame" |
-| `image.renderer` | `"auto"` | `auto` picks the native image when the terminal supports it |
-| `image.native.mode` | `"anim"` | `anim` = terminal loops the frames itself; `frames` = resend per tick |
-| `image.native.palette` | `128` | Colour count of the quantized frames (16–256) |
-| `layout.width` / `layout.gap` | `88` / `4` | Total splash width, and the gap between the two panels |
-| `panels.info.fields` | `["version","model","theme"]` | Any of `version`, `model`, `theme`, `gif`, `frames`, `renderer` |
-| `panels.resources.sections` | all four | Any of `context`, `skills`, `themes`, `extensions` |
-| `panels.resources.width` / `height` | `"auto"` | Pin a panel's width, or let it grow with the content |
-| `behavior.static` / `behavior.enabled` | `false` / `true` | Freeze on one frame, or disable the splash |
+| `image.path` | `~/Pictures/logo/v-3.gif`, else the bundled artwork | GIF to animate (`~` expands) |
+| `image.width` / `image.height` | `44` / `"auto"` | Art size in cells; `"auto"` follows the gif's aspect ratio |
+| `image.fps` / `image.stride` | `"auto"` / `3` | `"auto"` = the gif's own frame delays; `stride` keeps every Nth frame |
+| `image.chafa` | `""` | Extra chafa flags as one string, e.g. `"--symbols block -c 16"` |
+| `layout.width` / `layout.gap` | `88` / `4` | Total splash width, and the gap between the columns |
+| `layout.twoColumnMinWidth` / `compactMinWidth` | `76` / `32` | Below these the panels stack, then collapse to three lines |
+| `panels.info.enabled` / `.fields` | `true` / version, model, theme | Also `gif`, `frames` |
+| `panels.resources.enabled` / `.sections` | `true` / all four | `context`, `skills`, `themes`, `extensions` |
+| `panels.resources.width` / `.height` / `.maxLinesPerSection` | `"auto"` / `"auto"` / `6` | Panel sizing |
+| `behavior.enabled` / `.static` / `.hidePiResourceList` | `true` / `false` / `true` | Master switch, freeze on one frame, drop pi's own listing |
 
-`pi-chafa-banner.schema.json` describes every key (editors will autocomplete it);
-`pi-chafa-banner.example.json` is a complete, valid example.
+`--probe`, `--animate` and `--clear` are dropped from `image.chafa`: the first
+makes chafa wait for a terminal reply and steal pi's stdin, the second breaks
+framing, the third wipes the screen. `pi-chafa-banner.schema.json` describes every
+key for editor autocompletion.
 
 ## Commands
 
@@ -89,22 +90,22 @@ default for that key; a warning is shown in `/splash status`.
 | `/splash freeze` | Hold the current frame (or resume) |
 | `/splash rebuild` | Re-run the pipeline and cache |
 | `/splash reload` | Re-read `pi-chafa-banner.json` and rebuild |
-| `/splash status` | Effective config, cache state, detected tools |
+| `/splash status` | Effective config, cache state, detected tools, warnings |
 
 ## Credits
 
-- Inspired by [beautiful-pi](https://github.com/danielmrdev/beautiful-pi) (MIT):
-  the idea of a two-column `setHeader` splash with a `RESOURCES` box. No code was
-  copied; the box drawing and line distribution here are independent.
-- [pi-splash](https://github.com/mavam/pi-splash) (MIT) informed the scrolling
-  behaviour, the `unref()` timer discipline and the narrow-terminal fallback. No
-  code was copied either — see `docs/ARCHITECTURE.md` for an item-by-item note.
-- [chafa](https://hpjansson.org/chafa/) renders the character art, `ffmpeg`
-  extracts and quantizes frames, and [`@earendil-works/pi-tui`](https://github.com/earendil-works/pi)
-  provides the kitty/iTerm2 encoders, cell metrics and width tables.
+- [beautiful-pi](https://github.com/danielmrdev/beautiful-pi) (MIT): the idea of a
+  `setHeader` splash with a `RESOURCES` box. No code copied.
+- [pi-splash](https://github.com/mavam/pi-splash) (MIT): scrolling behaviour,
+  `unref()` timers, narrow-terminal fallback. No code copied.
+- [chafa](https://hpjansson.org/chafa/) renders the art, `ffmpeg` extracts frames,
+  and [`@earendil-works/pi-tui`](https://github.com/earendil-works/pi) supplies the
+  width tables the layout is measured with.
 
-Implementation details, module map and the invariants the renderer relies on:
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). 中文说明: [README.zh-CN.md](README.zh-CN.md).
+Module map, data flow and the invariants behind the layout:
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). A native kitty-image version lives on
+the `archive/kitty-native-images` branch for later work. 中文说明:
+[README.zh-CN.md](README.zh-CN.md).
 
 ## License
 

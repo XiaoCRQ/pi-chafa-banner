@@ -7,18 +7,14 @@
  * newer config can be shared with an older checkout.
  */
 
+import { MAX_CHAFA_ARGS_LENGTH } from "../pipeline/args.ts";
 import {
 	DEFAULT_FILE,
-	KITTY_MODES,
 	LIMITS,
 	PANEL_FIELDS,
-	RENDERERS,
 	RESOURCE_SECTIONS,
 	clamp,
-	paletteOf,
 	type AutoSize,
-	type BannerKittyMode,
-	type BannerRenderer,
 	type ImageSettings,
 	type LayoutSettings,
 	type PanelField,
@@ -155,6 +151,21 @@ class Reader {
 		return kept;
 	}
 
+	/** Free-form string (chafa arguments); a wrong type falls back to `fallback`. */
+	string(key: string, fallback: string): string {
+		const raw = this.raw[key];
+		if (raw === undefined) return fallback;
+		if (typeof raw !== "string") {
+			this.warn(key, `expected a string, got ${show(raw)}`);
+			return fallback;
+		}
+		if (raw.length > MAX_CHAFA_ARGS_LENGTH) {
+			this.warn(key, `truncated to ${MAX_CHAFA_ARGS_LENGTH} characters`);
+			return raw.slice(0, MAX_CHAFA_ARGS_LENGTH);
+		}
+		return raw;
+	}
+
 	/** Optional path string; blank strings count as "not set". */
 	text(key: string): string | undefined {
 		const raw = this.raw[key];
@@ -186,7 +197,6 @@ export function validateSettings(raw: unknown): ValidatedSettings {
 	}
 
 	const image = file.child("image");
-	const native = image.child("native");
 	const layout = file.child("layout");
 	const panels = file.child("panels");
 	const info = panels.child("info");
@@ -194,7 +204,6 @@ export function validateSettings(raw: unknown): ValidatedSettings {
 	const behavior = file.child("behavior");
 
 	const imageDefaults = DEFAULTS.image;
-	const nativeDefaults = imageDefaults.native;
 	const layoutDefaults = DEFAULTS.layout;
 	const panelDefaults = DEFAULTS.panels;
 	const behaviorDefaults = DEFAULTS.behavior;
@@ -206,14 +215,7 @@ export function validateSettings(raw: unknown): ValidatedSettings {
 			height: image.autoSize("height", LIMITS.height, imageDefaults.height),
 			fps: image.rate("fps", LIMITS.fps, imageDefaults.fps),
 			stride: image.number("stride", LIMITS.stride, imageDefaults.stride),
-			renderer: image.oneOf("renderer", RENDERERS, imageDefaults.renderer as BannerRenderer),
-			native: {
-				mode: native.oneOf("mode", KITTY_MODES, nativeDefaults.mode as BannerKittyMode),
-				palette: paletteOf(native.number("palette", LIMITS.palette, nativeDefaults.palette)),
-				maxPixels: native.number("maxPixels", LIMITS.maxPixels, nativeDefaults.maxPixels),
-				maxFrames: native.number("maxFrames", LIMITS.maxFrames, nativeDefaults.maxFrames),
-				animSeconds: native.number("animSeconds", LIMITS.animSeconds, nativeDefaults.animSeconds),
-			},
+			chafa: image.string("chafa", imageDefaults.chafa),
 		},
 		layout: {
 			width: layout.number("width", LIMITS.layoutWidth, layoutDefaults.width),

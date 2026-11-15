@@ -7,14 +7,7 @@
     "height": "auto",
     "fps": "auto",
     "stride": 3,
-    "renderer": "auto",
-    "native": {
-      "mode": "anim",
-      "palette": 128,
-      "maxPixels": 640000,
-      "maxFrames": 24,
-      "animSeconds": 0
-    }
+    "chafa": ""
   },
   "layout": {
     "width": 88,

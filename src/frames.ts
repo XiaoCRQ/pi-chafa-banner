@@ -15,18 +15,23 @@
  *   --animate off       one still per file; we drive the animation ourselves
  *   -c full | 256       match the theme's color mode (truecolor vs 256)
  *   -s WxH              fixed cell grid; keeps every frame identical in size
+ *
+ * `image.chafa` adds user flags in front of the ones above (last flag wins in
+ * chafa, so users can override e.g. `--symbols`), except the three the pipeline
+ * must own — see `pipeline/args.ts`.
  */
 
 import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { formatSize, type BannerConfig, type BannerSize } from "./config.ts";
+import { argsDigest } from "./pipeline/args.ts";
 import { cacheFilePath, cacheRoot, deleteCacheFile, readCacheJson, writeCacheJson } from "./pipeline/cache.ts";
-import { FrameError, gifHash, missingToolsFor, preflight, run } from "./pipeline/process.ts";
+import { FrameError, gifHash, preflight, run } from "./pipeline/process.ts";
 import { aggregateDelays, probeGifTiming, sampledIndices } from "./pipeline/timing.ts";
 import { padVisible, truncateToWidth, visibleWidth } from "./text.ts";
 
 // Re-exported so callers keep one import for "the char pipeline".
-export { FrameError, gifHash, missingToolsFor, preflight, run } from "./pipeline/process.ts";
+export { FrameError, gifHash, preflight, run } from "./pipeline/process.ts";
 export { cacheRoot } from "./pipeline/cache.ts";
 export type { PreflightResult } from "./pipeline/process.ts";
 
@@ -65,16 +70,23 @@ export function chafaColorArgs(mode: string): string[] {
 	}
 }
 
-export async function frameCachePath(gifPath: string, size: BannerSize, colorMode: string): Promise<string> {
+export async function frameCachePath(
+	gifPath: string,
+	size: BannerSize,
+	colorMode: string,
+	chafaArgs: readonly string[] = [],
+): Promise<string> {
 	const hash = await gifHash(gifPath);
-	return cacheFilePath(hash, `frames-${formatSize(size)}-${normalizeColorMode(colorMode)}.json`);
+	const digest = argsDigest(chafaArgs);
+	const suffix = digest ? `-${digest}` : "";
+	return cacheFilePath(hash, `frames-${formatSize(size)}-${normalizeColorMode(colorMode)}${suffix}.json`);
 }
 
 /** Delete exactly this gif's char-frame cache (never a directory tree). */
 export async function clearCache(config: BannerConfig, colorMode: string): Promise<boolean> {
 	if (!config.gifPath) return false;
 	try {
-		return await deleteCacheFile(await frameCachePath(config.gifPath, config.size, colorMode));
+		return await deleteCacheFile(await frameCachePath(config.gifPath, config.size, colorMode, config.chafaArgs));
 	} catch {
 		return false;
 	}
@@ -90,6 +102,8 @@ interface CachePayload {
 	stride: number;
 	/** Per-frame display time in ms; missing in caches written before v2. */
 	delays?: number[];
+	/** User chafa flags the frames were produced with (cache key component). */
+	chafa?: string[];
 	builtAt: number;
 	frames: string[][];
 }
@@ -191,7 +205,7 @@ export async function loadFrames(
 ): Promise<FrameSet> {
 	const gifPath = config.gifPath;
 	if (!gifPath) {
-		throw new FrameError("no-gif", "no gif configured (set PI_BANNER_GIF)");
+		throw new FrameError("no-gif", "no image configured (set image.path in pi-chafa-banner.json)");
 	}
 
 	const tools = await preflight();
@@ -200,7 +214,8 @@ export async function loadFrames(
 	}
 
 	const size = config.size;
-	const cachePath = await frameCachePath(gifPath, size, colorMode);
+	const chafaArgs = config.chafaArgs;
+	const cachePath = await frameCachePath(gifPath, size, colorMode, chafaArgs);
 
 	if (!options.force) {
 		const cached = await readCache(cachePath, size, colorMode);
@@ -261,6 +276,7 @@ export async function loadFrames(
 					"--probe",
 					"off",
 					...chafaColorArgs(colorMode),
+					...chafaArgs,
 					"-s",
 					formatSize(size),
 					"--animate",
@@ -296,6 +312,7 @@ export async function loadFrames(
 			totalFrames: files.length,
 			stride,
 			delays,
+			chafa: chafaArgs,
 			builtAt,
 			frames,
 		};

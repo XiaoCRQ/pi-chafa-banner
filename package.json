@@ -1,7 +1,7 @@
 {
 	"name": "pi-chafa-banner",
-	"version": "2.0.0",
-	"description": "Animated splash header for pi: chafa character art, or the real picture on kitty terminals",
+	"version": "3.0.0",
+	"description": "Animated chafa splash header for pi: gif art top-left, model info below, skills/themes/extensions on the right",
 	"type": "module",
 	"private": false,
 	"license": "MIT",
@@ -11,12 +11,10 @@
 		"chafa",
 		"banner",
 		"splash",
-		"kitty-graphics",
-		"ascii-art"
+		"ansi-art"
 	],
 	"files": [
 		"src",
-		"types",
 		"assets",
 		"docs",
 		"README.md",

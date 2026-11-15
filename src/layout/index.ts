@@ -3,7 +3,7 @@
  *
  *   - `layout/box.ts`     — borders, wrapping, resource sections
  *   - `layout/compose.ts` — two columns, centering, clamping, compact splash
- *   - `layout/metrics.ts` — row/column budgets, image band planning
+ *   - `layout/metrics.ts` — document body and block width budgets
  */
 
 export * from "./box.ts";
