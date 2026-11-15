@@ -173,6 +173,7 @@ export function loadConfig(options: LoadOptions = {}): BannerConfig {
 		hideResources: settings.hideResources,
 		layout,
 		panels,
+		theme: settings.theme,
 		source,
 	};
 }
@@ -200,6 +201,10 @@ export function describeConfigSource(config: BannerConfig): string {
 
 /** One-line summary used by `/splash status`. */
 export function describeConfig(config: BannerConfig): string {
+	const theme = config.theme;
+	const overrides = (["windowTitle", "sectionTitle", "border", "content"] as const)
+		.filter((role) => theme[role])
+		.map((role) => `${role}=${theme[role]}`);
 	return [
 		`gif=${config.gifPath ?? "(none)"}`,
 		`image=${formatSize(config.size)} (derived)`,
@@ -208,6 +213,7 @@ export function describeConfig(config: BannerConfig): string {
 		`fps=${config.fps === "auto" ? "native" : config.fps}`,
 		`stride=${config.stride}`,
 		`static=${config.static}`,
+		`theme=${theme.preset}${overrides.length > 0 ? ` (${overrides.join(", ")})` : ""}`,
 		config.chafaArgs.length > 0 ? `chafa="${config.chafaArgs.join(" ")}"` : undefined,
 	]
 		.filter((part): part is string => part !== undefined)
@@ -242,5 +248,6 @@ export const DEFAULTS: BannerConfig = {
 		info: { ...DEFAULT_FILE.panels.info, fields: [...DEFAULT_FILE.panels.info.fields] },
 		resources: { ...DEFAULT_FILE.panels.resources, sections: [...DEFAULT_FILE.panels.resources.sections] },
 	},
+	theme: { ...DEFAULT_FILE.theme },
 	source: { warnings: [] },
 };

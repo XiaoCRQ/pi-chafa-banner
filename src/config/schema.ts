@@ -22,6 +22,35 @@ export type AutoSize = number | "auto";
 /** `"auto"` = the gif's own timing, a number = fixed frames per second. */
 export type RateSetting = number | "auto";
 
+/**
+ * Where the splash colours come from.
+ *
+ * `"tokyonight"` (the default) pins the built-in dark palette, so the splash
+ * looks the same everywhere; every role stays overridable. `"pi"` follows the
+ * active pi theme instead, which is what light terminals want.
+ */
+export type ThemePreset = "pi" | "tokyonight";
+
+/** The four colour roles a user can point at their own hex values. */
+export type ThemeRole = "windowTitle" | "sectionTitle" | "border" | "content";
+
+/**
+ * Colours for the boxes. Every role is optional: an unset role falls back to the
+ * preset — `"tokyonight"` (`TOKYONIGHT_PALETTE`, the default) or `"pi"` to
+ * follow pi's theme tokens instead (theme-aware, lighter).
+ */
+export interface ThemeSettings {
+	preset: ThemePreset;
+	/** Box titles: `RESOURCES`, `(pi) CODING AGENT`, `IMAGE`. */
+	windowTitle?: string;
+	/** Section headings: `[Context]`, `[Skills]`, … */
+	sectionTitle?: string;
+	/** Box borders and the dashes either side of a title. */
+	border?: string;
+	/** Body text: values, names, the status line. */
+	content?: string;
+}
+
 export interface ImageSettings {
 	path: string | undefined;
 	fps: RateSetting;
@@ -82,6 +111,8 @@ export interface BannerConfig {
 	hideResources: boolean;
 	layout: LayoutSettings;
 	panels: PanelsSettings;
+	/** Palette: preset plus any per-role hex overrides. */
+	theme: ThemeSettings;
 	/** Where the values came from; surfaced by `/splash status`. */
 	source: ConfigSource;
 }
@@ -113,8 +144,25 @@ export const DEFAULT_FILE = {
 			maxLinesPerSection: 6,
 		},
 	},
+	theme: { preset: "tokyonight" },
 	behavior: { enabled: true, static: false, hidePiResourceList: true },
 } as const;
+
+/**
+ * Tokyo Night, reduced to the four roles the splash paints.
+ *
+ * Blue titles, purple section labels, a muted indigo border and the palette's
+ * foreground for body text — same hierarchy as pi's theme tokens, one palette.
+ */
+export const TOKYONIGHT_PALETTE: Required<Omit<ThemeSettings, "preset">> = {
+	windowTitle: "#7aa2f7",
+	sectionTitle: "#bb9af7",
+	border: "#3b4261",
+	content: "#a9b1d6",
+};
+
+export const THEME_PRESETS: readonly ThemePreset[] = ["pi", "tokyonight"];
+export const THEME_ROLES: readonly ThemeRole[] = ["windowTitle", "sectionTitle", "border", "content"];
 
 /** Hard caps keep a typo from producing an unusable splash. */
 export const LIMITS = {
@@ -168,6 +216,22 @@ export const BANNER_MAX_WIDTH = 108;
 export const BANNER_MIN_STACK_WIDTH = 76;
 /** Width below which the splash degrades to three plain lines. */
 export const BANNER_MIN_COMPACT_WIDTH = 32;
+
+/** `#rgb` / `#rrggbb` -> lowercase `#rrggbb`; anything else -> undefined. */
+export function parseHexColor(raw: string | undefined): string | undefined {
+	if (raw === undefined) return undefined;
+	const match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(raw.trim());
+	if (!match) return undefined;
+	const digits = match[1]!;
+	const full =
+		digits.length === 3
+			? digits
+					.split("")
+					.map((digit) => digit + digit)
+					.join("")
+			: digits;
+	return `#${full.toLowerCase()}`;
+}
 
 /** "44x22" -> {44,22}. Accepts "44X22" and stray whitespace; invalid -> fallback. */
 export function parseSize(raw: string | undefined, fallback: BannerSize = { width: 44, height: 22 }): BannerSize {

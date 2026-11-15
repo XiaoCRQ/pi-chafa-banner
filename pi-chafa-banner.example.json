@@ -37,6 +37,13 @@
       "maxLinesPerSection": 6
     }
   },
+  "theme": {
+    "preset": "tokyonight",
+    "windowTitle": "#7aa2f7",
+    "sectionTitle": "#bb9af7",
+    "border": "#3b4261",
+    "content": "#a9b1d6"
+  },
   "behavior": {
     "enabled": true,
     "static": false,

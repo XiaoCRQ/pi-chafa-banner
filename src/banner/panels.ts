@@ -74,5 +74,5 @@ export function charPlaceholder(painter: Painter, status: string | undefined, wi
 /** Short, stable description used by `/splash status` and the preview script. */
 export function describeConfig(config: BannerConfig): string {
 	const chafa = config.chafaArgs.length > 0 ? ` chafa="${config.chafaArgs.join(" ")}"` : "";
-	return `size=${formatSize(config.size)} fps=${config.fps === "auto" ? "native" : config.fps} stride=${config.stride} mode=${config.static ? "static" : "anim"}${chafa}`;
+	return `size=${formatSize(config.size)} fps=${config.fps === "auto" ? "native" : config.fps} stride=${config.stride} theme=${config.theme.preset} mode=${config.static ? "static" : "anim"}${chafa}`;
 }

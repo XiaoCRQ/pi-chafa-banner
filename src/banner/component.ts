@@ -52,7 +52,8 @@ export class Banner implements Component {
 	/** Floor between two frames: below this the redraw churn is not worth it. */
 	private static readonly MIN_FRAME_MS = 20;
 
-	private readonly painter: Painter;
+	private readonly theme: Theme;
+	private painter: Painter;
 	private config: BannerConfig;
 	private resources: BannerResources;
 	private frames: FrameSet | undefined;
@@ -69,7 +70,8 @@ export class Banner implements Component {
 		theme: Theme,
 		init: BannerInit,
 	) {
-		this.painter = themePainter(theme);
+		this.theme = theme;
+		this.painter = themePainter(theme, init.config.theme);
 		this.config = init.config;
 		this.resources = init.resources;
 		this.frames = init.frames;
@@ -100,6 +102,9 @@ export class Banner implements Component {
 
 	setConfig(config: BannerConfig): void {
 		this.config = config;
+		// `/splash reload` may have changed the palette; rebuild the painter so the
+		// next render picks it up without recycling the header component.
+		this.painter = themePainter(this.theme, config.theme);
 		this.frozen = config.static || this.frozen;
 		this.visible = config.enabled;
 		if (!this.visible) this.stopTimer();

@@ -17,6 +17,7 @@ src/banner/
   panels.ts                 info card rows, resource sections, status line, placeholder
 src/layout/
   box.ts                    boxes, painters, titles, line distribution
+  palette.ts                theme roles -> hex -> ANSI (truecolor / 256)
   compose.ts                twoColumn, centerBlock, clampLines, compactSplash
   metrics.ts                CHROME_ROWS, splashRows, blockWidthFor
 src/text/
@@ -98,7 +99,23 @@ is clipped from the top to fit what is left after the info card, the status line
 and any stacked panel — the card never gives way, because the card is the part
 that carries information.
 
-## 5. Invariants
+## 5. Colour
+
+Boxes take four roles — `windowTitle`, `sectionTitle`, `border`, `content` — from
+the `theme` group. `resolvePalette()` merges `theme.preset` with per-role hex
+overrides (an override always wins). The default preset `"tokyonight"` pins all
+four to `TOKYONIGHT_PALETTE` (`#7aa2f7`, `#bb9af7`, `#3b4261`, `#a9b1d6`);
+`"preset": "pi"` resolves to an empty palette, and `themePainter()` then paints
+with pi's own `borderMuted` / `mdHeading` / `text` tokens, so a light terminal
+stays readable. `content` replaces the `text`/`muted`/`dim` trio with one colour.
+
+Emission follows `theme.getColorMode()`: 24-bit SGR for `truecolor`, the nearest
+entry of the 6x6x6 cube or the 24-step grey ramp for `256color`. The reset is
+`ESC[39m` (default foreground), not `ESC[0m`, so bold from an outer wrapper
+survives — the same contract as pi's `fg()`. Colours never change the measured
+width, which is why the ANSI wrappers are applied *after* padding.
+
+## 6. Invariants
 
 Break one of these and pi's renderer corrupts the screen.
 
@@ -120,7 +137,7 @@ Break one of these and pi's renderer corrupts the screen.
 10. The host tree is edited only in memory, reversibly: `host.ts` removes pi's
     `loadedResourcesContainer` and `restore()` puts it back at its old index.
 
-## 6. Configuration
+## 7. Configuration
 
 `pi-chafa-banner.json` lives next to the plugin (`configPath(pluginRoot())`).
 `validateSettings()` walks the document with a `Reader` that records
@@ -133,7 +150,7 @@ into two equal columns around `layout.gap`, and `applySourceSize()` recomputes t
 height from the artwork's aspect ratio (a character cell is roughly twice as tall
 as it is wide) once per build, via `probeSourceSize()` (ffprobe).
 
-## 7. Cache
+## 8. Cache
 
 - `~/.pi/agent/tmp/pi-chafa-banner/<sha1>/frames-<WxH>-<color>[-<args>].json`
 - Atomic writes: `<file>.<pid>.tmp` then `rename`.
@@ -141,14 +158,16 @@ as it is wide) once per build, via `probeSourceSize()` (ffprobe).
   chafa flags.
 - `/splash rebuild` forces a re-render; `/splash reload` also re-reads the JSON.
 
-## 8. Tests
+## 9. Tests
 
-`bun test` — 184 cases in 11 files. `test/frames.test.ts` and `test/timing.test.ts`
+`bun test` — 204 cases in 12 files. `test/frames.test.ts` and `test/timing.test.ts`
 shell out to real `ffmpeg`/`ffprobe`/`chafa` and skip when the tools or the sample
 gif are missing. `test/text-parity.test.ts` compares `visibleWidth`/`truncateToWidth`
-against pi-tui's own implementation when it can be resolved.
+against pi-tui's own implementation when it can be resolved. `test/theme.test.ts`
+covers hex parsing, preset/override merging, the truecolor and 256-color SGR
+conversion, and that the palette never changes measured widths.
 
-## 9. Upstream references
+## 10. Upstream references
 
 | Project | Licence | Relation |
 | --- | --- | --- |

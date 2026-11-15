@@ -185,6 +185,41 @@
         }
       }
     },
+    "theme": {
+      "description": "Colours of the boxes. Every role is optional; unset roles fall back to theme.preset, which defaults to the built-in tokyonight palette.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "preset": {
+          "description": "\"tokyonight\" (default) = the palette below, dark and saturated. \"pi\" = follow pi's theme tokens instead, which is lighter and adapts to light/dark themes.",
+          "enum": [
+            "pi",
+            "tokyonight"
+          ],
+          "default": "tokyonight"
+        },
+        "windowTitle": {
+          "description": "Box titles: RESOURCES, (pi) CODING AGENT, IMAGE. Hex \"#rgb\" or \"#rrggbb\".",
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"
+        },
+        "sectionTitle": {
+          "description": "Section headings inside the RESOURCES box: [Context], [Skills], [Themes], [Extensions].",
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"
+        },
+        "border": {
+          "description": "Box borders and the dashes either side of a title.",
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"
+        },
+        "content": {
+          "description": "Body text: info values, resource names, the status line. Overrides the text/muted/dim trio with one colour.",
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"
+        }
+      }
+    },
     "behavior": {
       "type": "object",
       "additionalProperties": true,
@@ -200,7 +235,7 @@
           "default": false
         },
         "hidePiResourceList": {
-          "description": "true = remove pi's own [Context]/[Skills]/\u2026 listing below the splash.",
+          "description": "true = remove pi's own [Context]/[Skills]/… listing below the splash.",
           "type": "boolean",
           "default": true
         }

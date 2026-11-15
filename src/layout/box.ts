@@ -6,12 +6,23 @@
  */
 
 import { centerVisible, padVisible, truncateToWidth, visibleWidth } from "../text.ts";
+import { paintForeground, resolvePalette, type PaletteSettings } from "./palette.ts";
 
 
 /** Narrowest panel that still renders a readable box. */
 export const MIN_PANEL_WIDTH = 28;
 
+/**
+ * Colour roles the layout asks for.
+ *
+ * `border`, `windowTitle` and `sectionTitle` are the themable box parts;
+ * `text`/`muted`/`dim` are the three intensities of body content, which a single
+ * `theme.content` colour collapses onto one.
+ */
 export type ColorToken =
+	| "border"
+	| "windowTitle"
+	| "sectionTitle"
 	| "borderMuted"
 	| "mdHeading"
 	| "dim"
@@ -35,11 +46,34 @@ export const plainPainter: Painter = {
 export interface ThemeLike {
 	fg(token: string, text: string): string;
 	bold(text: string): string;
+	/** Present on pi's real `Theme`; optional so tests can stub a flat one. */
+	getColorMode?(): string;
 }
 
-export function themePainter(theme: ThemeLike): Painter {
+/**
+ * Painter over pi's theme, with the splash palette layered on top.
+ *
+ * Every role falls back to pi's own token when neither the preset nor the
+ * config file sets it, so `"preset": "pi"` looks exactly like the unthemed
+ * banner and still follows light/dark theme switches. The default preset is
+ * `"tokyonight"`, which pins all four roles instead.
+ */
+export function themePainter(theme: ThemeLike, settings?: PaletteSettings): Painter {
+	const palette = resolvePalette(settings);
+	const mode = theme.getColorMode?.() === "256color" ? "256color" : "truecolor";
+	const custom = (hex: string | undefined, text: string) =>
+		hex === undefined ? undefined : paintForeground(hex, text, mode);
+	const painters: Partial<Record<ColorToken, (text: string) => string>> = {
+		border: (text) => custom(palette.border, text) ?? theme.fg("borderMuted", text),
+		windowTitle: (text) => custom(palette.windowTitle, text) ?? theme.fg("mdHeading", text),
+		sectionTitle: (text) => custom(palette.sectionTitle, text) ?? theme.fg("mdHeading", text),
+		// One `content` colour covers values, labels and dimmed names alike.
+		text: (text) => custom(palette.content, text) ?? theme.fg("text", text),
+		muted: (text) => custom(palette.content, text) ?? theme.fg("muted", text),
+		dim: (text) => custom(palette.content, text) ?? theme.fg("dim", text),
+	};
 	return {
-		fg: (token, text) => theme.fg(token, text),
+		fg: (token, text) => painters[token]?.(text) ?? theme.fg(token, text),
 		bold: (text) => theme.bold(text),
 	};
 }
@@ -87,11 +121,11 @@ export function panel(
 	const inner = w - 2;
 	// Content area is "│ " + text + " │", i.e. w - 4 columns.
 	const contentWidth = Math.max(0, w - 4);
-	const border = (ch: string) => painter.fg("borderMuted", ch);
+	const border = (ch: string) => painter.fg("border", ch);
 
 	let top: string;
 	if (title && contentWidth >= 6) {
-		const styled = painter.bold(painter.fg("mdHeading", ` ${title} `));
+		const styled = painter.bold(painter.fg("windowTitle", ` ${title} `));
 		const titleWidth = Math.min(visibleWidth(styled), inner);
 		const leftDashes = Math.max(0, Math.floor((inner - titleWidth) / 2));
 		const rightDashes = Math.max(0, inner - titleWidth - leftDashes);
@@ -219,7 +253,7 @@ export function resourceSection(
 	painter: Painter,
 	maxLines = Number.POSITIVE_INFINITY,
 ): string[] {
-	const out = [painter.bold(painter.fg("mdHeading", `[${title}]`))];
+	const out = [painter.bold(painter.fg("sectionTitle", `[${title}]`))];
 	if (names.length === 0) {
 		out.push(painter.fg("dim", "  (none)"));
 		return out;

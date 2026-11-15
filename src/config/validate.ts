@@ -13,13 +13,17 @@ import {
 	LIMITS,
 	PANEL_FIELDS,
 	RESOURCE_SECTIONS,
+	THEME_PRESETS,
 	clamp,
+	parseHexColor,
 	type AutoSize,
 	type ImageSettings,
 	type LayoutSettings,
 	type PanelField,
 	type PanelsSettings,
 	type ResourceSectionId,
+	type ThemePreset,
+	type ThemeSettings,
 } from "./schema.ts";
 
 type Json = Record<string, unknown>;
@@ -28,6 +32,7 @@ export interface ValidatedSettings {
 	image: ImageSettings;
 	layout: LayoutSettings;
 	panels: PanelsSettings;
+	theme: ThemeSettings;
 	enabled: boolean;
 	static: boolean;
 	hideResources: boolean;
@@ -166,6 +171,26 @@ class Reader {
 		return raw;
 	}
 
+	/**
+	 * `#rgb` / `#rrggbb`; blank means "use the preset" and is not warned about.
+	 * A malformed value is dropped with a warning rather than failing the load.
+	 */
+	color(key: string): string | undefined {
+		const raw = this.raw[key];
+		if (raw === undefined) return undefined;
+		if (typeof raw !== "string") {
+			this.warn(key, `expected a "#rrggbb" colour, got ${show(raw)}`);
+			return undefined;
+		}
+		if (raw.trim() === "") return undefined;
+		const hex = parseHexColor(raw);
+		if (!hex) {
+			this.warn(key, `expected a "#rgb" or "#rrggbb" colour, got ${show(raw)}`);
+			return undefined;
+		}
+		return hex;
+	}
+
 	/** Optional path string; blank strings count as "not set". */
 	text(key: string): string | undefined {
 		const raw = this.raw[key];
@@ -201,6 +226,7 @@ export function validateSettings(raw: unknown): ValidatedSettings {
 	const panels = file.child("panels");
 	const info = panels.child("info");
 	const resources = panels.child("resources");
+	const theme = file.child("theme");
 	const behavior = file.child("behavior");
 
 	const imageDefaults = DEFAULTS.image;
@@ -243,6 +269,13 @@ export function validateSettings(raw: unknown): ValidatedSettings {
 					panelDefaults.resources.maxLinesPerSection,
 				),
 			},
+		},
+		theme: {
+			preset: theme.oneOf("preset", THEME_PRESETS, DEFAULTS.theme.preset as ThemePreset),
+			windowTitle: theme.color("windowTitle"),
+			sectionTitle: theme.color("sectionTitle"),
+			border: theme.color("border"),
+			content: theme.color("content"),
 		},
 		enabled: behavior.bool("enabled", behaviorDefaults.enabled),
 		static: behavior.bool("static", behaviorDefaults.static),

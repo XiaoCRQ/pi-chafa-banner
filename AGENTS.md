@@ -20,11 +20,13 @@ bun test                        # 全部用例必须绿（不写死数字，看�
 # 不启动 pi，直接看排版（最快的调参回路）
 bun run scripts/preview.ts --static --width 100
 bun run scripts/preview.ts --width 60            # 堆叠布局
-bun run scripts/preview.ts --static --chafa "--symbols block"
+bun run scripts/preview.ts --static --theme tokyonight   # 换配色
+bun run scripts/preview.ts --static --color border=#ff0000
 
 # 真机验证（交互式，需人工看）
 pi -e .                         # 临时加载扩展，不动 settings
 bash scripts/demo.sh --preview  # 同上，打印生效配置后再预览
+bash scripts/demo.sh            # 真机：pi --no-extensions -e .（只加载本插件）
 ```
 
 **禁止**为了验证而写自动化脚本去启动交互式 pi（它会一直占住 TTY）。非交互冒烟只能：
@@ -44,6 +46,7 @@ src/extension/header.ts   installHeader（setHeader + 摘除 pi 的资源列表�
 src/extension/commands.ts USAGE、SUBCOMMANDS、handleSplashCommand
 src/banner/component.ts   Banner 类：render / invalidate / dispose + 帧定时器
 src/banner/panels.ts      infoRows / sections / 状态行 / 占位卡 / describeConfig
+src/layout/palette.ts     resolvePalette / hexToRgb / rgbTo256 / foregroundCode / paintForeground
 src/layout/box.ts         panel / infoBox / resourcePanel / wrapNames / distributeLines / themePainter
 src/layout/compose.ts     twoColumn / centerBlock / clampLines / compactSplash
 src/layout/metrics.ts     CHROME_ROWS / splashRows / blockWidthFor
@@ -159,11 +162,20 @@ assets/banner.gif（或 image.path）
 | layout | `width` 88、`gap` 2、`twoColumnMinWidth` 76、`compactMinWidth` 32、`maxWidth` 108、`lowerRows` 12 |
 | panels.info | `enabled` true、`fields` `["version","model","theme"]`（可选 `gif`/`frames`） |
 | panels.resources | `enabled` true、`sections` 全部、`maxLinesPerSection` 6（`width`/`height` 仅堆叠时用） |
+| theme | `preset` `"tokyonight"`（默认，`#7aa2f7`/`#bb9af7`/`#3b4261`/`#a9b1d6`）、`windowTitle`/`sectionTitle`/`border`/`content` 默认空（取预设）；`preset` 写 `"pi"` 改为跟随 pi 主题 token |
 | behavior | `enabled` true、`static` false、`hidePiResourceList` true |
 
 宽容策略：缺文件/缺键 → 默认值；类型或枚举错 → 默认值 + `source.warnings`；
 数值越界 → clamp + 警告；未知键静默忽略。`/splash status` 打印生效配置、缓存、
 工具检测与全部警告。
+
+配色：四个角色（`windowTitle` 窗口标题、`sectionTitle` 标签标题、`border` 边框、
+`content` 窗口内容）由 `src/layout/palette.ts` 的 `resolvePalette()` 解析——默认
+`preset: "tokyonight"` 把四色全部钉死，`preset: "pi"` 返回空 palette，此时
+`themePainter(theme, settings)` 回落到 pi 的 `borderMuted`/`mdHeading`/`text`；
+写了 `content` 就一并顶掉 `text`/`muted`/`dim` 三档。
+选色按 `theme.getColorMode()` 走 `truecolor`（24 位 SGR）或 `256color`（最近
+调色板项），复位用 `ESC[39m` 而不是 `ESC[0m`，不能踩掉外层 bold。
 
 命令：`/splash on|off|freeze|rebuild|reload|status`。`off` 用
 `ctx.ui.setHeader(undefined)` 恢复内置 header 并 `restore()` pi 的资源列表。
@@ -197,8 +209,12 @@ assets/banner.gif（或 image.path）
   `assets/banner.gif`（缓存按 mtime 失效，无需清缓存）。
 - **换画布尺寸/宽高比**：改 `layout.width`（两列与画布一起变，高度按 gif 宽高比
   自动推算，下限 4 行、上限 60 行）；然后确认 `INFO_BOX_ROWS` 是否仍成立。
-- **改边框/配色**：只动 `src/layout/box.ts` 的 `THIN_BOX` 与 `themePainter()` 的
-  token 映射；不要硬编码 RGB，主题切换要跟着变。
+- **改边框/配色**：字符形状只动 `src/layout/box.ts` 的 `THIN_BOX`；颜色走
+  `src/config/schema.ts` 的 `TOKYONIGHT_PALETTE` + `src/layout/palette.ts` 的
+  `resolvePalette()`，token 映射在 `themePainter()` 里。四个角色之外的颜色（例如
+  状态行）仍用 pi token，不要为新硬编码 RGB 开例外——`theme.preset: "tokyonight"`
+  是默认，`"pi"` 那条路径必须保住浅色终端可读性。加角色要同步 `THEME_ROLES`、`ThemeSettings`、schema.json、
+  `README.md` 的配色表与 `test/theme.test.ts`。
 - **加资源区块**：`src/banner/panels.ts sections()` + `src/resources.ts collectResources()`
   + `src/config/schema.ts` 的 `RESOURCE_SECTIONS`；`distributeLines()` 负责高度分配。
 - **改动画节奏**：`src/banner/component.ts` 的 `frameDelay()`/`scheduleTick()`、

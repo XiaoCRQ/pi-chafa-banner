@@ -32,9 +32,14 @@ import {
 	formatSize,
 	LIMITS,
 	loadConfig,
+	parseHexColor,
 	parseSize,
+	THEME_PRESETS,
+	THEME_ROLES,
 	type BannerConfig,
 	type RateSetting,
+	type ThemePreset,
+	type ThemeRole,
 } from "../src/config.ts";
 import { FrameError, loadFrames, preflight, type FrameSet } from "../src/frames.ts";
 import { argsDigest, parseChafaArgs } from "../src/pipeline/args.ts";
@@ -74,6 +79,10 @@ interface Args {
 	chafa?: string;
 	/** Explicit config file. */
 	config?: string;
+	/** `--theme`: palette preset override. */
+	theme?: ThemePreset;
+	/** `--color role=#hex`: per-role colour overrides. */
+	colors: Partial<Record<ThemeRole, string>>;
 }
 
 const USAGE = `usage: bun run scripts/preview.ts [flags]
@@ -92,6 +101,8 @@ const USAGE = `usage: bun run scripts/preview.ts [flags]
   --real-resources    scan the current machine instead of stub resources
   --plain             disable colors
   --chafa "ARGS"      extra chafa flags (same syntax as image.chafa)
+  --theme NAME        palette preset: tokyonight (default) | pi
+  --color ROLE=#HEX   override one theme role: windowTitle|sectionTitle|border|content
   --256               render with the 256-color palette
   -h, --help          this text`;
 
@@ -128,6 +139,7 @@ function parseArgs(argv: string[]): Args {
 		colorMode: "truecolor",
 		realResources: false,
 		frame: 0,
+		colors: {},
 	};
 
 	for (let i = 0; i < argv.length; i++) {
@@ -190,6 +202,22 @@ function parseArgs(argv: string[]): Args {
 			case "--256":
 				args.colorMode = "256color";
 				break;
+			case "--theme": {
+				const raw = argv[++i] ?? "";
+				if (THEME_PRESETS.includes(raw as ThemePreset)) args.theme = raw as ThemePreset;
+				else console.warn(`preview: unknown theme ${raw} (expected ${THEME_PRESETS.join(" | ")})`);
+				break;
+			}
+			case "--color": {
+				const [role, value] = (argv[++i] ?? "").split("=");
+				const hex = parseHexColor(value);
+				if (!THEME_ROLES.includes(role as ThemeRole) || !hex) {
+					console.warn(`preview: --color expects ROLE=#hex with ROLE one of ${THEME_ROLES.join(" | ")}`);
+					break;
+				}
+				args.colors[role as ThemeRole] = hex;
+				break;
+			}
 			case "--help":
 			case "-h":
 				console.log(USAGE);
@@ -227,7 +255,7 @@ const RGB: Record<string, [number, number, number]> = {
 	error: [235, 120, 120],
 };
 
-function stubTheme(plain: boolean): Theme {
+function stubTheme(plain: boolean, colorMode: "truecolor" | "256color" = "truecolor"): Theme {
 	const fg = (token: string, text: string) => {
 		if (plain) return text;
 		const [r, g, b] = RGB[token] ?? RGB.text;
@@ -239,7 +267,7 @@ function stubTheme(plain: boolean): Theme {
 		bold: (text) => (plain ? text : `\x1b[1m${text}\x1b[22m`),
 		italic: (text) => text,
 		underline: (text) => text,
-		getColorMode: () => "truecolor",
+		getColorMode: () => colorMode,
 	};
 }
 
@@ -318,6 +346,8 @@ async function main(): Promise<void> {
 	}
 	if (args.fps !== undefined) config.fps = args.fps;
 	if (args.chafa !== undefined) config.chafaArgs = parseChafaArgs(args.chafa);
+	if (args.theme) config.theme = { ...config.theme, preset: args.theme };
+	if (Object.keys(args.colors).length > 0) config.theme = { ...config.theme, ...args.colors };
 	if (args.static) config.static = true;
 	if (!args.size && config.gifPath) {
 		try {
@@ -360,7 +390,7 @@ async function main(): Promise<void> {
 		}
 	}
 
-	const banner = new Banner(stubTui, stubTheme(args.plain), {
+	const banner = new Banner(stubTui, stubTheme(args.plain, args.colorMode), {
 		config,
 		resources: await resolveResources(args.realResources),
 		frames,
