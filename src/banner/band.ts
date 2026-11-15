@@ -9,13 +9,12 @@
  *   - `frames` — one root sequence per frame, swapped by the timer (escape hatch
  *                for terminals that ignore `a=f`).
  *
- * Built sequences are ~100 KB each, so the result is memoized per image id,
- * mode, frame and crop rectangle.
+ * Built sequences are ~100 KB each, so the result is memoized per image set,
+ * mode and frame.
  */
 
 import type { ImageFrameSet } from "../images.ts";
-import { buildKittyLine, cropKittyRoot, replaceKittyPayload } from "../kitty.ts";
-import type { ImageBandPlan } from "../layout.ts";
+import { buildKittyLine, replaceKittyPayload } from "../kitty.ts";
 
 /** Upper bound for the memo: `frames` mode needs one entry per frame. */
 const MAX_CACHED_LINES = 32;
@@ -79,16 +78,15 @@ function baseLine(
 }
 
 /**
- * The line to render: the full picture, or the same transmission with a cropped
- * source rectangle (`x/y/w/h`) when the terminal cannot fit all of it.
+ * The line to render: always the whole picture.
+ *
+ * The band is never cropped to fit the window — a shortened `r=` would disagree
+ * with the `rows` pi registered for the placement (`renderImage`), and pi then
+ * drops the placement as soon as the band is partially scrolled.
  */
 export function buildImageLine(
 	images: ImageFrameSet,
-	options: { animate: boolean; kittyMode: "anim" | "frames"; frameIndex: number; plan?: ImageBandPlan },
+	options: { animate: boolean; kittyMode: "anim" | "frames"; frameIndex: number },
 ): string {
-	const base = baseLine(images, options);
-	const plan = options.plan;
-	if (!plan || plan.whole) return base;
-	const key = `crop|${options.animate}|${options.frameIndex}|${options.kittyMode}|${plan.rows}x${plan.columns}@${plan.sourceX},${plan.sourceY},${plan.sourceWidth}x${plan.sourceHeight}`;
-	return cached(images, key, () => cropKittyRoot(base, plan));
+	return baseLine(images, options);
 }

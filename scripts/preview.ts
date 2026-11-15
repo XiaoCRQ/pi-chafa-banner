@@ -334,10 +334,10 @@ function checkLayout(lines: readonly string[], width: number, terminalRows: numb
 		if (imageIndexes.length > 1) problems.push(`expected exactly one image line, found ${imageIndexes.length}`);
 		const start = imageIndexes[0];
 		if (start !== undefined) {
-			// A short terminal crops the band, so the transmitted `r=` is the source of truth here,
-			// not `images.rows`. It must never exceed what the pipeline built.
+			// The band is never cropped, so the transmitted `r=` must equal what the
+			// pipeline built — pi registers that row count for the placement.
 			const band = bandRows(lines[start]!, images);
-			if (band > images.rows) problems.push(`root frame says r=${band}, but only ${images.rows} rows were built`);
+			if (band !== images.rows) problems.push(`root frame says r=${band}, but ${images.rows} rows were built`);
 			for (let offset = 1; offset < band; offset++) {
 				if (lines[start + offset] !== "") {
 					problems.push(`reserved row ${start + offset} is not the empty string: ${JSON.stringify(lines[start + offset]?.slice(0, 20))}`);
@@ -350,11 +350,15 @@ function checkLayout(lines: readonly string[], width: number, terminalRows: numb
 	for (const [index, line] of lines.entries()) {
 		if (visibleWidth(line) > width) problems.push(`line ${index} is ${visibleWidth(line)} wide, terminal is ${width}`);
 	}
-	if (lines.length > terminalRows) problems.push(`${lines.length} rows do not fit a ${terminalRows}-row terminal`);
+	// The picture is never shortened, so a splash taller than the terminal is
+	// expected (pi scrolls it) — only complain when there is no picture to blame.
+	if (lines.length > terminalRows && imageIndexes.length === 0) {
+		problems.push(`${lines.length} rows do not fit a ${terminalRows}-row terminal`);
+	}
 	return problems;
 }
 
-/** Rows the band actually reserves: the cropped `r=` when present, else the built height. */
+/** Rows the band actually reserves: the transmitted `r=`, else the built height. */
 function bandRows(line: string, images: ImageFrameSet): number {
 	return parseKittyRows(line) ?? images.rows;
 }

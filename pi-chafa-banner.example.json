@@ -5,7 +5,6 @@
     "path": "~/Pictures/logo/v-3.gif",
     "width": 44,
     "height": "auto",
-    "fit": "crop",
     "fps": 16,
     "stride": 3,
     "renderer": "auto",
@@ -28,11 +27,20 @@
   "panels": {
     "info": {
       "enabled": true,
-      "fields": ["version", "model", "theme"]
+      "fields": [
+        "version",
+        "model",
+        "theme"
+      ]
     },
     "resources": {
       "enabled": true,
-      "sections": ["context", "skills", "themes", "extensions"],
+      "sections": [
+        "context",
+        "skills",
+        "themes",
+        "extensions"
+      ],
       "width": "auto",
       "height": "auto",
       "maxLinesPerSection": 6

@@ -18,7 +18,7 @@ bun test                    # 全部用例必须绿
 
 bun run scripts/preview.ts --width 100                 # 字符画排版
 bun run scripts/preview.ts --image --width 100         # 图片带排版
-bun run scripts/preview.ts --rows 24 --plain           # 矮终端裁剪
+bun run scripts/preview.ts --rows 24 --plain           # 矮终端（图片不裁，面板让位）
 pi -e .                                                # 真机（交互式，人工看）
 ```
 
@@ -46,7 +46,7 @@ src/banner/band.ts        ImageFrameSet → kitty 序列行（WeakMap 记忆）
 src/banner/panels.ts      info 卡、RESOURCES 分组、占位卡（纯函数）
 src/layout/box.ts         主题化盒子、换行、distributeLines
 src/layout/compose.ts     twoColumn / centerBlock / compactSplash
-src/layout/metrics.ts     行列预算、planImageBand、splashRows、parseKittyRows
+src/layout/metrics.ts     行列预算、splashRows、parseKittyRows
 src/text/ansi.ts          转义识别、isImageLine、stripAnsi
 src/text/width.ts         visibleWidth/padVisible/centerVisible（pi-tui 对等）
 src/text/truncate.ts      truncateToWidth 等
@@ -54,7 +54,7 @@ src/pipeline/process.ts   无 tty spawn、preflight、gif 指纹
 src/pipeline/cache.ts     缓存根、原子写 JSON、单文件删除
 src/frames.ts             字符管线：gif → ffmpeg → chafa → 缓存
 src/images.ts             图片管线：gif → ffmpeg → pal8 PNG → base64
-src/kitty.ts              kitty 协议：编码、裁剪、换 id、删除
+src/kitty.ts              kitty 协议：编码、换 id、删除
 src/resources.ts          采集 version/model/theme/context/skills/…
 src/host.ts               从 pi 组件树摘除它自带的资源列表
 src/{config,layout,text,banner}.ts   一层 barrel，保持旧导入路径不变
@@ -80,8 +80,10 @@ src/{config,layout,text,banner}.ts   一层 barrel，保持旧导入路径不变
     补空格（pi 的 `getKittyImageReservedRows` 遇 `visibleWidth > 0` 立即停止计数），续行必须是
     字面 `""`，序列必须走 `renderImage(..., { imageId, moveCursor: false })`。
 11. **原生图片模式只能是「顶部整条图带 + 下方块」**，文字不能与图并排。
-12. **矮终端只许裁剪，不许把图换成占位卡**：`metrics.ts planImageBand()` 算源矩形（偏上
-    1/3），`kitty.ts cropKittyRoot()` 只改 head 的 `x/y/w/h/c/r`。占位卡只用于「还没有图」。
+12. **图片永远不裁剪、不缩小**。矮终端下图片按 `images.columns x images.rows` 原样输出，让位的
+    是下方 info/RESOURCES 面板（`lowerLines()` 在 `budget < MIN_BOX_ROWS` 时返回空）。原因有二：
+    用户明确要求；且 `renderImage()` 注册的 placement rows 是整张图的行数，改小的 `r=`/`c=` 会让
+    pi 的 reserved-row 计数与元数据失配，图片在轻微遮挡时被覆盖删除。占位卡只用于「还没有图」。
 13. **resize 必须换新 `imageId` 重传**：`Banner.syncTerminalShape()` 记住 `${columns}x${rows}`，
     一变就 `fallbackImageId()` + `reassignKittyImageId()` 并清行缓存。原因：kitty 在视口变化时
     丢/挪 placement，而 pi 的 fullscreen 路径一旦认为 id 已上传就用 `a=p`（无 payload）替换我们的
@@ -110,7 +112,7 @@ gif → preflight（只要 ffmpeg）→ 单遍抽取+scale+palettegen/paletteuse
 
 - 改 JSON 结构就要给 `CACHE_VERSION` / `IMAGE_CACHE_VERSION` +1。
 - `imageId` **绝不落盘**（跨进程会撞）。
-- 裁剪发生在 render 期，不在管线里：所以矮终端/宽图不会触发 re-encode。
+- 管线只按配置尺寸构建一次（高度永不随终端变化），所以矮终端/宽图都不会触发 re-encode 或缩小。
 - `image.height: "auto"` 由 ffmpeg 探测真实宽高比得到——chafa 需要固定画布，kitty 网格按像素
   算，不统一两边行数就会不同。
 
@@ -130,9 +132,8 @@ schema 见 `pi-chafa-banner.schema.json`。
 - 块宽 = `min(cols - 4, min(layout.maxWidth, layout.width))`（默认 88）。
 - 文档行数 = `terminalRows - CHROME_ROWS(7)`（editor 3 + footer 2 + header 上下 Spacer）。
 - 双栏阈值 `layout.twoColumnMinWidth`(76)，紧凑阈值 `layout.compactMinWidth`(32)。
-- 图片带：`planImageBand()` 的 `available = body - statusRows - IMAGE_GAP_ROWS`；能整张放下就
-  原样，否则 `rows = max(MIN_IMAGE_ROWS, available - lowerRows)`，列不够再等比裁宽；只有
-  `availableColumns < min(MIN_IMAGE_COLUMNS, image.columns)` 或 `available < 1` 才退占位卡。
+- 图片带：`images.rows` 行 + `IMAGE_GAP_ROWS` 个空行，恒原样；`body = splashRows(rows) - status`，
+  剩余空间 `< MIN_BOX_ROWS`(5) 时面板整块略去，图片仍然完整，因此 splash 可能比 body 更高（pi 会滚动）。
 - 回归办法：`preview --rows 18|20|24|30|40|50`，检查 `total-rows + CHROME_ROWS ≤ rows`。
   超出会触发 pi 的 `fullRender(true)`（清 scrollback）。
 

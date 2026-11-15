@@ -25,7 +25,6 @@ export type BannerRenderer = "auto" | "chars" | "kitty";
 export type BannerKittyMode = "anim" | "frames";
 
 /** `crop` fills the cell grid (bleeding edges), `contain` letterboxes. */
-export type ImageFit = "crop" | "contain";
 
 /** Which facts the info card may show. */
 export type PanelField = "version" | "model" | "theme" | "gif" | "frames" | "renderer";
@@ -41,7 +40,6 @@ export interface ImageSettings {
 	width: number;
 	/** Character rows, or `auto` = derive from the source aspect ratio. */
 	height: AutoSize;
-	fit: ImageFit;
 	fps: number;
 	stride: number;
 	renderer: BannerRenderer;
@@ -98,7 +96,6 @@ export interface BannerConfig {
 	size: BannerSize;
 	/** `true` when `size.height` came from `image.height: "auto"`. */
 	heightAuto: boolean;
-	fit: ImageFit;
 	fps: number;
 	stride: number;
 	renderer: BannerRenderer;
@@ -131,7 +128,6 @@ export const DEFAULT_FILE = {
 		path: "~/Pictures/logo/v-3.gif",
 		width: 44,
 		height: "auto",
-		fit: "crop",
 		fps: 16,
 		stride: 3,
 		renderer: "auto",
@@ -172,7 +168,6 @@ export const PANEL_FIELDS: readonly PanelField[] = ["version", "model", "theme",
 export const RESOURCE_SECTIONS: readonly ResourceSectionId[] = ["context", "skills", "themes", "extensions"];
 export const RENDERERS: readonly BannerRenderer[] = ["auto", "chars", "kitty"];
 export const KITTY_MODES: readonly BannerKittyMode[] = ["anim", "frames"];
-export const IMAGE_FITS: readonly ImageFit[] = ["crop", "contain"];
 
 /** Snap an arbitrary palette size to the nearest supported value (round down). */
 export function paletteOf(n: number): 16 | 32 | 64 | 128 | 256 {

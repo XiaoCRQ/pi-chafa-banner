@@ -292,46 +292,6 @@ export function reassignKittyImageId(sequence: string, imageId: number): string 
 	return sequence.slice(0, start + 3) + params.join(",") + sequence.slice(semi);
 }
 
-/** Source rectangle + cell grid a cropped root sequence must carry. */
-export interface KittyCrop {
-	sourceX: number;
-	sourceY: number;
-	sourceWidth: number;
-	sourceHeight: number;
-	columns: number;
-	rows: number;
-}
-
-/**
- * Crop the root sequence to a source rectangle without touching its payload.
- *
- * kitty scales `w`x`h` pixels of the source into `c`x`r` cells, and an animated
- * image applies the rect to every frame, so a short terminal only needs this
- * one head rewrite — no re-encode, no re-upload.
- */
-export function cropKittyRoot(sequence: string, crop: KittyCrop): string {
-	const start = sequence.indexOf("\x1b_G");
-	if (start < 0) return sequence;
-	const semi = sequence.indexOf(";", start);
-	if (semi < 0) return sequence;
-	const params = sequence
-		.slice(start + 3, semi)
-		.split(",")
-		.filter((param) => {
-			const key = param.split("=", 1)[0];
-			return key !== "x" && key !== "y" && key !== "w" && key !== "h" && key !== "c" && key !== "r";
-		});
-	params.push(
-		`x=${Math.max(0, Math.round(crop.sourceX))}`,
-		`y=${Math.max(0, Math.round(crop.sourceY))}`,
-		`w=${Math.max(1, Math.round(crop.sourceWidth))}`,
-		`h=${Math.max(1, Math.round(crop.sourceHeight))}`,
-		`c=${Math.max(1, Math.round(crop.columns))}`,
-		`r=${Math.max(1, Math.round(crop.rows))}`,
-	);
-	return sequence.slice(0, start + 3) + params.join(",") + sequence.slice(semi);
-}
-
 export interface KittyFrameSource {
 	sequence: string;
 	frames: { base64: string }[];

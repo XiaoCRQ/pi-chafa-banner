@@ -35,7 +35,7 @@ src/
   layout/
     box.ts                 themed boxes, wrapping, line distribution
     compose.ts             twoColumn / centerBlock / compactSplash
-    metrics.ts             row & column budgets, planImageBand, kitty row parsing
+    metrics.ts             row & column budgets, splashRows, kitty row parsing
   text/
     ansi.ts                escape recognition (CSI/OSC/APC), isImageLine, stripAnsi
     width.ts               visible width, padding, centring (pi-tui parity)
@@ -45,7 +45,7 @@ src/
     cache.ts               cache root, atomic JSON write, single-file delete
   frames.ts                char pipeline: gif → ffmpeg → chafa → cached ANSI frames
   images.ts                image pipeline: gif → ffmpeg → pal8 PNG → base64 frames
-  kitty.ts                 kitty protocol: encode, crop, re-target, delete
+  kitty.ts                 kitty protocol: encode, re-target, delete
   resources.ts             collect version/model/theme/context/skills/…
   host.ts                  detach pi's own resource listing from the component tree
   config.ts, layout.ts,   barrels (one-line re-exports) so imports stay stable
@@ -113,10 +113,12 @@ render(width)
     so pi can crop and reuse the placement.
 11. **Native mode is a full-width band on top.** Text cannot sit beside a kitty
     image: the reserved rows after it must be empty.
-12. **Short terminals crop, they don't downgrade.** `planImageBand()` picks the
-    visible source rectangle (biased to the top third, so faces survive) and
-    `cropKittyRoot()` rewrites `x/y/w/h/c/r` in the root frame head — no
-    re-encoding, no extra upload.
+12. **The picture is never cropped or shrunk.** A band taller than the window is
+    emitted whole and pi scrolls it; the info/RESOURCES block yields instead
+    (`lowerLines()` returns nothing below `MIN_BOX_ROWS`, the height of the info card). A shortened `r=`/`c=`
+    would also desynchronise the `rows` pi registered for the placement via
+    `renderImage()`, and pi then erases the picture as soon as the band is
+    partially scrolled.
 13. **A resize must retransmit with a fresh image id.** `syncTerminalShape()`
     compares `${columns}x${rows}`; on change it re-targets the sequence with
     `fallbackImageId()` and clears the line cache. Reason: kitty drops or moves
@@ -165,9 +167,9 @@ in height.
 `bun test` runs the suite in `test/`. No test starts pi or a real terminal:
 
 - `test/splash.test.ts`, `test/banner-*.test.ts`, `test/layout*.test.ts`:
-  composition contracts (width ≤ render width, centring, stacking, cropping,
+  composition contracts (width ≤ render width, centring, stacking, band sizing,
   placeholder fallbacks) against a stub TUI and a synthesized frame set.
-- `test/kitty.test.ts`, `test/images.test.ts`: protocol encoding, crops,
+- `test/kitty.test.ts`, `test/images.test.ts`: protocol encoding, re-targeting,
   re-targeting, cache payloads.
 - `test/text-parity.test.ts`: compares `visibleWidth()` with pi-tui's real
   implementation when the package is installed (skipped otherwise).

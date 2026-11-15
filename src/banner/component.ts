@@ -29,17 +29,14 @@ import {
 	IMAGE_GAP_ROWS,
 	blockWidthFor,
 	compactSplash,
-	cropTopRows,
 	infoBox,
 	panel,
 	panelWidths,
-	planImageBand,
 	resourcePanel,
 	splashRows,
 	themePainter,
 	twoColumn,
 	wrapNames,
-	type ImageBandPlan,
 	type Painter,
 	type ResourceSection,
 } from "../layout.ts";
@@ -48,10 +45,10 @@ import { isImageLine, maxVisibleWidth, padVisible, truncateToWidth, visibleWidth
 
 /** Info card: 3 rows + 2 borders. */
 const INFO_BOX_ROWS = 5;
+/** Smallest box worth drawing: the info card (3 content rows + 2 borders). */
+const MIN_BOX_ROWS = 5;
 /** Lines the image-mode "no picture yet" card occupies (never height-dependent). */
 const IMAGE_PLACEHOLDER_ROWS = 5;
-/** Floor for the info/panel block when the terminal cannot fit its ideal size. */
-const MIN_LOWER_FLOOR = 4;
 
 export interface BannerInit {
 	config: BannerConfig;
@@ -398,7 +395,7 @@ export class Banner implements Component {
 		const leftPad = Math.max(0, Math.floor((cols - blockWidth) / 2));
 		const totalRows = splashRows(this.tui.terminal?.rows ?? 40);
 		const body = Math.max(0, totalRows - (this.status ? 1 : 0));
-		const band = this.bandLines(blockWidth, body);
+		const band = this.bandLines(blockWidth);
 		const lines = [
 			...band,
 			...this.lowerLines(blockWidth, Math.max(0, body - band.length)),
@@ -420,15 +417,21 @@ export class Banner implements Component {
 	 * Both renderers produce the same shape — a single pixel line plus `rows-1`
 	 * empty continuations, or chafa's character rows — so the panel block below
 	 * starts on the same row either way and the two modes look identical.
+	 *
+	 * The band is never cropped and never shrunk to fit the window: a picture that
+	 * is taller than the visible body is emitted whole (pi scrolls it), and the
+	 * panel block below gives way instead. Cropping also broke pi's placement
+	 * bookkeeping — `renderImage` registers `rows` for the full picture, so a
+	 * shortened `r=` desynchronised the reserved-row count and the placement was
+	 * erased as soon as the band was partially scrolled.
 	 */
-	private bandLines(blockWidth: number, bodyRows: number): string[] {
-		const rows =
-			this.renderer === "kitty" ? this.pixelBand(blockWidth, bodyRows) : this.charBand(blockWidth, bodyRows);
+	private bandLines(blockWidth: number): string[] {
+		const rows = this.renderer === "kitty" ? this.pixelBand(blockWidth) : this.charBand(blockWidth);
 		return [...rows, ...Array.from({ length: IMAGE_GAP_ROWS }, () => "")];
 	}
 
-	/** Native pixels: one sequence line, `plan.rows - 1` empty continuation rows. */
-	private pixelBand(blockWidth: number, bodyRows: number): string[] {
+	/** Native pixels: one sequence line, `rows - 1` empty continuation rows. */
+	private pixelBand(blockWidth: number): string[] {
 		const terminalColumns = this.tui.terminal?.columns ?? blockWidth;
 		const terminalRows = this.tui.terminal?.rows ?? 40;
 		// Resize first: it may hand us a new image id, and that id must be on screen
@@ -438,39 +441,18 @@ export class Banner implements Component {
 		const images = this.images;
 		if (!images) return this.imagePlaceholder(blockWidth);
 
-		// Crop the source rectangle instead of dropping the picture: a short
-		// terminal then shows fewer rows of real pixels, not a placeholder card.
-		const plan = planImageBand({
-			totalRows: bodyRows,
-			statusRows: 0,
-			availableColumns: blockWidth,
-			lowerRows: this.config.layout.lowerRows,
-			image: {
-				rows: images.rows,
-				columns: images.columns,
-				pixelWidth: images.pixelWidth,
-				pixelHeight: images.pixelHeight,
-			},
-		});
-		if (!plan) return this.imagePlaceholder(blockWidth);
-
-		const imgPad = Math.max(0, Math.floor((blockWidth - plan.columns) / 2));
-		const rows = [(imgPad > 0 ? " ".repeat(imgPad) : "") + this.imageLine(images, plan)];
+		const imgPad = Math.max(0, Math.floor((blockWidth - images.columns) / 2));
+		const rows = [(imgPad > 0 ? " ".repeat(imgPad) : "") + this.imageLine(images)];
 		// Continuation rows must be "" — see the class doc and AGENTS.md §3.10.
-		for (let index = 1; index < plan.rows; index++) rows.push("");
+		for (let index = 1; index < images.rows; index++) rows.push("");
 		return rows;
 	}
 
-	/** Character art: chafa rows, cropped from the top when the terminal is short. */
-	private charBand(blockWidth: number, bodyRows: number): string[] {
+	/** Character art: every chafa row, centred; never cut down. */
+	private charBand(blockWidth: number): string[] {
 		const frame = this.currentFrame();
 		if (!frame) return this.placeholder(blockWidth);
-		const lower = Math.min(
-			this.config.layout.lowerRows,
-			Math.max(MIN_LOWER_FLOOR, bodyRows - IMAGE_GAP_ROWS - 1),
-		);
-		const room = Math.max(1, bodyRows - IMAGE_GAP_ROWS - lower);
-		const rows = cropTopRows(frame, Math.min(frame.length, room));
+		const rows = [...frame];
 		const width = Math.min(blockWidth, maxVisibleWidth(rows));
 		const pad = Math.max(0, Math.floor((blockWidth - width) / 2));
 		return rows.map((line) => " ".repeat(pad) + truncateToWidth(padVisible(line, width), width, ""));
@@ -486,6 +468,9 @@ export class Banner implements Component {
 		const infoEnabled = this.config.panels.info.enabled;
 		const resourcesEnabled = this.config.panels.resources.enabled;
 		if (!infoEnabled && !resourcesEnabled) return [];
+		// The picture is never cut down, so on a short terminal the panels are the
+		// part that yields: below one bordered row they would only render a frame.
+		if (budget < MIN_BOX_ROWS) return [];
 
 		const infoRows = this.infoRows();
 		const sections = this.sections();
@@ -502,9 +487,9 @@ export class Banner implements Component {
 			return sum + Math.min(lines, options.maxLinesPerSection);
 		}, 2);
 		const height = Math.max(
-			3,
+			MIN_BOX_ROWS,
 			Math.min(
-				Math.max(budget, 3),
+				Math.max(budget, MIN_BOX_ROWS),
 				Math.max(layout.lowerRows, typeof wanted === "number" ? wanted : 0, contentRows),
 			),
 		);
@@ -542,12 +527,11 @@ export class Banner implements Component {
 	}
 
 	/** The line the terminal draws the picture on (see `banner/band.ts`). */
-	private imageLine(images: ImageFrameSet, plan?: ImageBandPlan): string {
+	private imageLine(images: ImageFrameSet): string {
 		return buildImageLine(images, {
 			animate: !this.frozen && !this.config.static,
 			kittyMode: this.config.kittyMode,
 			frameIndex: this.frameIndex,
-			plan,
 		});
 	}
 

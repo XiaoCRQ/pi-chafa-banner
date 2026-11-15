@@ -63,7 +63,6 @@ bun run scripts/preview.ts --image --width 100    # 图片带模式
 | --- | --- | --- |
 | `image.path` | 包内自带图 | 要播放的 GIF（支持 `~`） |
 | `image.width` / `image.height` | `44` / `"auto"` | 图片尺寸（字符格）；`"auto"` 按 GIF 宽高比推导 |
-| `image.fit` | `"crop"` | `crop` 填满裁剪，`contain` 完整留边 |
 | `image.fps` / `image.stride` | `16` / `3` | 播放帧率 / 每 N 帧取一帧 |
 | `image.renderer` | `"auto"` | `auto` 在终端支持时用原生图片 |
 | `image.native.mode` | `"anim"` | `anim` 交给终端自己循环；`frames` 每帧重传（兼容性逃生口） |

@@ -46,7 +46,7 @@ describe("config: reading values", () => {
 		const config = load(
 			JSON.stringify({
 				version: 1,
-				image: { path: "/art/cat.gif", width: 60, height: 18, fit: "contain", fps: 12, stride: 2, renderer: "chars" },
+				image: { path: "/art/cat.gif", width: 60, height: 18, fps: 12, stride: 2, renderer: "chars" },
 				layout: { width: 100, gap: 6, lowerRows: 14 },
 				panels: { info: { enabled: false, fields: ["model"] }, resources: { sections: ["skills"], maxLinesPerSection: 3 } },
 				behavior: { static: true, hidePiResourceList: false },
@@ -55,7 +55,6 @@ describe("config: reading values", () => {
 		expect(config.gifPath).toBe("/art/cat.gif");
 		expect(config.size).toEqual({ width: 60, height: 18 });
 		expect(config.heightAuto).toBe(false);
-		expect(config.fit).toBe("contain");
 		expect(config.fps).toBe(12);
 		expect(config.stride).toBe(2);
 		expect(config.renderer).toBe("chars");

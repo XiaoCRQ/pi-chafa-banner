@@ -31,10 +31,8 @@ export const IMAGE_GAP_ROWS = 1;
  */
 export const CHROME_ROWS = 7;
 /** Lower-block height at which a two-column info + panel layout still reads. */
-export const MIN_LOWER_ROWS = 11;
 /** Even on a tall terminal the info/panel block does not grow past this. */
 export const MAX_LOWER_ROWS = 14;
-export const MIN_IMAGE_ROWS = 4;
 export const MIN_IMAGE_COLUMNS = 4;
 
 /**
@@ -73,17 +71,6 @@ export function panelWidths(
 }
 
 /**
- * Keep the top `rows` of a character-art frame, biased upwards so faces survive
- * (same 1/3 rule as `planImageBand`).
- */
-export function cropTopRows(lines: readonly string[], rows: number): string[] {
-	if (rows >= lines.length) return [...lines];
-	if (rows <= 0) return [];
-	const hidden = Math.floor(((lines.length - rows) * 1) / 3);
-	return lines.slice(hidden, hidden + rows);
-}
-
-/**
  * Rows a splash may occupy on a `terminalRows`-row terminal: the document body
  * minus pi's chrome. Floor of 10 keeps the existing degraded layout on absurdly
  * short terminals (`render()` still clamps to the terminal width/height).
@@ -102,100 +89,19 @@ export interface ImageBandBudget {
 /**
  * Upper bounds handed to the image pipeline.
  *
- * Width is capped by the block (`PI_BANNER_SIZE` or `terminalCols - 4`), but the
- * *height* is deliberately not. Short terminals are handled at render time by
- * `planImageBand()`, which crops the source rectangle; shrinking the build
- * instead would preserve the aspect ratio and hand back a tiny picture (a 4-row
- * budget turns a 44x22 canvas into 8x4 cells, i.e. 72px wide). Keeping the build
- * at the requested size also means growing the window reuses the cache instead
- * of re-encoding, and only a width shrink triggers a rebuild.
+ * Width is capped by the block (`layout.width` or `terminalCols - 4`); the height
+ * is the configured picture height and never depends on the terminal. A short
+ * window must not shrink the picture: the band is emitted at its full size and
+ * the panel block underneath gives way instead. Shrinking the build would also
+ * preserve the aspect ratio and hand back a tiny picture (a 4-row budget turns a
+ * 44x22 canvas into 8x4 cells, i.e. 72px wide).
  */
 export function imageBandBudget(options: {
 	cols: number;
 	size: BannerSize;
 }): ImageBandBudget {
 	const maxColumns = Math.min(options.size.width, blockWidthFor(options.cols));
-	return { maxColumns: Math.max(MIN_IMAGE_COLUMNS, maxColumns), maxRows: Math.max(MIN_IMAGE_ROWS, options.size.height) };
-}
-
-/**
- * How the picture band is laid out for the current terminal.
- *
- * A short terminal must never make the picture vanish: instead the source
- * rectangle (kitty `x=/y=/w=/h=`) is cropped, so the placement always occupies
- * real rows. Cropping happens before any network-free re-encode, which keeps
- * `render()` synchronous.
- */
-export interface ImageBandPlan {
-	/** Cell rows the placement occupies (`r=` after cropping). */
-	rows: number;
-	/** Cell columns the placement occupies (`c=` after cropping). */
-	columns: number;
-	/** Rows cut off the top of the source picture. */
-	hiddenRows: number;
-	/** Columns cut off the left of the source picture. */
-	hiddenColumns: number;
-	/** Source rectangle in image pixels. */
-	sourceX: number;
-	sourceY: number;
-	sourceWidth: number;
-	sourceHeight: number;
-	/** `true` when nothing is cropped (the sequence can be used verbatim). */
-	whole: boolean;
-}
-
-/**
- * Fit a built picture into the document body, cropping instead of dropping it.
- *
- * The band keeps `lowerRows` rows for the info card/panel when the terminal is
- * tall enough; below that it shrinks only down to `minRows` and lets the lower
- * block degrade. Returns `undefined` when even the minimum does not fit — the
- * caller then falls back to the placeholder card.
- */
-export function planImageBand(options: {
-	/** Rows of document body available (see `splashRows`). */
-	totalRows: number;
-	statusRows: number;
-	/** Columns the image line may span, minus the block's left pad. */
-	availableColumns: number;
-	image: { rows: number; columns: number; pixelWidth: number; pixelHeight: number };
-	/** Rows the lower block should keep while the picture still fits. */
-	lowerRows?: number;
-	/** Absolute floor for the picture band. */
-	minRows?: number;
-}): ImageBandPlan | undefined {
-	const image = options.image;
-	const minRows = Math.max(1, Math.floor(options.minRows ?? MIN_IMAGE_ROWS));
-	const lowerRows = Math.max(0, Math.floor(options.lowerRows ?? MIN_LOWER_ROWS));
-	const available = Math.max(0, Math.floor(options.availableColumns));
-	if (available < Math.min(MIN_IMAGE_COLUMNS, image.columns)) return undefined;
-
-	const maxRows = Math.max(0, options.totalRows - options.statusRows - IMAGE_GAP_ROWS);
-	if (maxRows < 1) return undefined;
-	const preferred = image.rows <= maxRows - lowerRows ? image.rows : Math.max(minRows, maxRows - lowerRows);
-	const rows = Math.max(1, Math.min(image.rows, maxRows, Math.max(1, preferred)));
-	const columns = Math.max(1, Math.min(image.columns, available));
-
-	// Bias the crop towards the top: anime/still art rarely has its subject in
-	// the bottom third, and a centred crop cuts faces in half.
-	const hiddenRows = rows >= image.rows ? 0 : Math.floor(((image.rows - rows) * 1) / 3);
-	const hiddenColumns = columns >= image.columns ? 0 : Math.floor((image.columns - columns) / 2);
-	const sourceY = Math.floor((image.pixelHeight * hiddenRows) / image.rows);
-	const sourceEndY = Math.ceil((image.pixelHeight * (hiddenRows + rows)) / image.rows);
-	const sourceX = Math.floor((image.pixelWidth * hiddenColumns) / image.columns);
-	const sourceEndX = Math.ceil((image.pixelWidth * (hiddenColumns + columns)) / image.columns);
-
-	return {
-		rows,
-		columns,
-		hiddenRows,
-		hiddenColumns,
-		sourceX,
-		sourceY,
-		sourceWidth: Math.max(1, Math.min(image.pixelWidth, sourceEndX) - sourceX),
-		sourceHeight: Math.max(1, Math.min(image.pixelHeight, sourceEndY) - sourceY),
-		whole: hiddenRows === 0 && hiddenColumns === 0 && rows === image.rows && columns === image.columns,
-	};
+	return { maxColumns: Math.max(MIN_IMAGE_COLUMNS, maxColumns), maxRows: Math.max(1, options.size.height) };
 }
 
 /**

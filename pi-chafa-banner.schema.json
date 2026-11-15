@@ -6,7 +6,9 @@
   "type": "object",
   "additionalProperties": true,
   "properties": {
-    "$schema": { "type": "string" },
+    "$schema": {
+      "type": "string"
+    },
     "version": {
       "description": "Config format version. Currently 1; other values are read anyway with a warning.",
       "type": "integer",
@@ -29,13 +31,17 @@
         },
         "height": {
           "description": "Height of the image, in terminal rows. 'auto' derives it from the width and the gif's aspect ratio.",
-          "oneOf": [{ "type": "integer", "minimum": 4, "maximum": 60 }, { "const": "auto" }],
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 4,
+              "maximum": 60
+            },
+            {
+              "const": "auto"
+            }
+          ],
           "default": "auto"
-        },
-        "fit": {
-          "description": "crop = keep the art full width and cut rows from the top when the terminal is short; contain = scale the art down until everything fits.",
-          "enum": ["crop", "contain"],
-          "default": "crop"
         },
         "fps": {
           "description": "Animation frames per second.",
@@ -53,7 +59,11 @@
         },
         "renderer": {
           "description": "auto = native pixels when the terminal supports them, else characters. chars = always chafa. kitty = require native pixels (one notice when unavailable).",
-          "enum": ["auto", "chars", "kitty"],
+          "enum": [
+            "auto",
+            "chars",
+            "kitty"
+          ],
           "default": "auto"
         },
         "native": {
@@ -62,7 +72,10 @@
           "properties": {
             "mode": {
               "description": "anim = the terminal loops the frames itself (0 bytes/s at rest). frames = retransmit one frame per tick (expensive).",
-              "enum": ["anim", "frames"],
+              "enum": [
+                "anim",
+                "frames"
+              ],
               "default": "anim"
             },
             "palette": {
@@ -153,11 +166,23 @@
           "type": "object",
           "additionalProperties": true,
           "properties": {
-            "enabled": { "type": "boolean", "default": true },
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
             "fields": {
               "description": "Which facts the coding-agent box shows, in order.",
               "type": "array",
-              "items": { "enum": ["version", "model", "theme", "gif", "frames", "renderer"] }
+              "items": {
+                "enum": [
+                  "version",
+                  "model",
+                  "theme",
+                  "gif",
+                  "frames",
+                  "renderer"
+                ]
+              }
             }
           }
         },
@@ -165,20 +190,48 @@
           "type": "object",
           "additionalProperties": true,
           "properties": {
-            "enabled": { "type": "boolean", "default": true },
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
             "sections": {
               "description": "Which resource groups the right-hand box lists.",
               "type": "array",
-              "items": { "enum": ["context", "skills", "themes", "extensions"] }
+              "items": {
+                "enum": [
+                  "context",
+                  "skills",
+                  "themes",
+                  "extensions"
+                ]
+              }
             },
             "width": {
               "description": "Preferred width of the resources box; 'auto' shares the row with the info box.",
-              "oneOf": [{ "type": "integer", "minimum": 16, "maximum": 200 }, { "const": "auto" }],
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 16,
+                  "maximum": 200
+                },
+                {
+                  "const": "auto"
+                }
+              ],
               "default": "auto"
             },
             "height": {
               "description": "Preferred height of the resources box; 'auto' grows with the content.",
-              "oneOf": [{ "type": "integer", "minimum": 4, "maximum": 40 }, { "const": "auto" }],
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 4,
+                  "maximum": 40
+                },
+                {
+                  "const": "auto"
+                }
+              ],
               "default": "auto"
             },
             "maxLinesPerSection": {
@@ -207,7 +260,7 @@
           "default": false
         },
         "hidePiResourceList": {
-          "description": "true = remove pi's own [Context]/[Skills]/… listing below the splash.",
+          "description": "true = remove pi's own [Context]/[Skills]/\u2026 listing below the splash.",
           "type": "boolean",
           "default": true
         }

@@ -127,20 +127,21 @@ describe("Banner degraded states", () => {
 		banner.dispose();
 	});
 
-	test("crops the art on short terminals to keep the info card visible", () => {
+	test("keeps the whole art on short terminals; the info card gives way", () => {
 		const { banner } = makeBanner({ frames: frames(), rows: 18 });
 		const lines = banner.render(100);
-		expect(lines.join("\n")).toContain("(pi) CODING AGENT");
+		// 12 art rows + 1 gap against an 11-row body: the art wins.
+		expect(lines.length).toBe(13);
+		expect(lines.join("\n")).not.toContain("(pi) CODING AGENT");
 		banner.dispose();
 	});
 
-	test("chars mode crops the canvas to the document body, like the native band", () => {
-		// Both renderers share one layout, so the character path must also fit
-		// `splashRows` — the band is cropped from the top third instead of scrolling
-		// the panels out of view.
+	test("chars mode emits every art row, like the native band", () => {
+		// Both renderers share one layout: the picture is never shortened, so the
+		// character canvas keeps all 12 rows on a 30-row terminal too.
 		const { banner } = makeBanner({ frames: frames(), rows: 30 });
 		const lines = banner.render(60);
-		expect(lines.length + CHROME_ROWS).toBeLessThanOrEqual(30);
+		expect(lines.length).toBeGreaterThanOrEqual(13);
 		for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(60);
 		banner.dispose();
 	});

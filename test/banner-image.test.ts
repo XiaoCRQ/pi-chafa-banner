@@ -110,10 +110,13 @@ describe("banner: image band structure", () => {
 		}
 	});
 
-	test("total height never exceeds the terminal", () => {
+	test("the picture is never shortened, whatever the terminal height", () => {
+		// The band is emitted at its built size; a short window makes the splash
+		// taller than the body (pi scrolls it) instead of cropping the pixels.
 		for (const rows of [20, 24, 30, 40, 60]) {
-			const lines = banner({ images: imageSet() }, rows).render(100);
-			expect(lines.length).toBeLessThanOrEqual(rows);
+			const lines = banner({ images: imageSet({ rows: 20 }) }, rows).render(100);
+			expect(imageLines(lines).length).toBe(1);
+			expect(parseKittyRows(imageLines(lines)[0]!)).toBe(20);
 		}
 	});
 
@@ -129,36 +132,38 @@ describe("banner: image band structure", () => {
 		}
 	});
 
-	test("a 40-row terminal crops the 44x22 canvas instead of dropping it", () => {
-		// A picture taller than the body is cropped via the source rect, never
-		// replaced by a card.
+	test("a 40-row terminal keeps the whole 44x22 canvas", () => {
+		// No source rect: the transmitted frame is exactly what the pipeline built,
+		// which keeps pi's registered placement rows in sync with `r=`.
 		const lines = banner({ images: imageSet({ rows: 22 }) }, 40).render(100);
 		expect(imageLines(lines).length).toBe(1);
 		const line = imageLines(lines)[0]!;
-		// body (33) - gap (1) - the panels' preferred height (12).
-		expect(parseKittyRows(line)).toBe(20);
-		expect(line).toContain("h=");
-		expect(line).toContain("y=0");
+		expect(parseKittyRows(line)).toBe(22);
+		expect(line).not.toContain("h=");
+		expect(line).not.toContain("y=");
 		expect(lines.some((text) => text.includes("IMAGE"))).toBe(false);
+		// 22 picture rows + 1 gap + 10 panel rows fit the 33-row body.
 		expect(lines.length + CHROME_ROWS).toBeLessThanOrEqual(40);
 	});
 
-	test("an image that eats the whole document body is cropped, not dropped", () => {
+	test("an image that eats the whole document body is emitted whole; panels yield", () => {
 		const lines = banner({ images: imageSet({ rows: 22 }) }, 24).render(100);
 		expect(imageLines(lines).length).toBe(1);
-		const rows = parseKittyRows(imageLines(lines)[0]!);
-		expect(rows).toBeGreaterThanOrEqual(4);
-		expect(rows).toBeLessThan(22);
+		expect(parseKittyRows(imageLines(lines)[0]!)).toBe(22);
 		expect(lines.some((line) => line.includes("IMAGE"))).toBe(false);
-		expect(lines.length).toBeLessThanOrEqual(24);
+		// 22 + gap is all the 17-row body can show; the panels step aside.
+		expect(lines.some((line) => line.includes("(pi) CODING AGENT"))).toBe(false);
 	});
 
-	test("tiny terminals degrade without overflowing", () => {
+	test("tiny terminals keep the picture and stay within the width contract", () => {
 		for (const rows of [10, 11, 12, 13, 14, 16]) {
 			for (const [columns, imageRows] of [[44, 22], [10, 4]]) {
 				const lines = banner({ images: imageSet({ columns, rows: imageRows }), status: "boom" }, rows).render(100);
-				expect(lines.length).toBeLessThanOrEqual(rows);
-				for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(100);
+				expect(imageLines(lines).length).toBe(1);
+				expect(parseKittyRows(imageLines(lines)[0]!)).toBe(imageRows);
+				for (const line of lines) {
+					expect(visibleWidth(line)).toBeLessThanOrEqual(100);
+				}
 			}
 		}
 	});
@@ -215,26 +220,23 @@ describe("banner: lower block", () => {
 });
 
 describe("banner: degradation", () => {
-	test("an oversized image is cropped rather than replaced by the placeholder", () => {
+	test("an oversized picture is kept whole rather than replaced by the placeholder", () => {
 		const lines = banner({ images: imageSet() }, 20).render(100);
 		expect(imageLines(lines).length).toBe(1);
-		expect(parseKittyRows(imageLines(lines)[0]!)).toBeGreaterThanOrEqual(4);
+		expect(parseKittyRows(imageLines(lines)[0]!)).toBe(20);
 		expect(lines.some((line) => line.includes("IMAGE"))).toBe(false);
-		expect(lines.some((line) => line.includes("(pi) CODING AGENT"))).toBe(true);
-		expect(lines.length).toBeLessThanOrEqual(20);
+		// 20 picture rows + gap against a 13-row body: the panels step aside.
+		expect(lines.some((line) => line.includes("(pi) CODING AGENT"))).toBe(false);
 	});
 
-	test("an image wider than the terminal is cropped horizontally", () => {
+	test("an image wider than the terminal is transmitted untrimmed", () => {
+		// The terminal clips the placement; we never narrow the source rect, because
+		// a shortened `c=` desynchronises pi's placement bookkeeping.
 		const lines = banner({ images: imageSet({ columns: 80, rows: 6 }) }, 40, 60).render(60);
 		expect(imageLines(lines).length).toBe(1);
 		const line = imageLines(lines)[0]!;
-		const columns = Number(/c=(\d+)/.exec(line)?.[1] ?? "0");
-		expect(columns).toBeLessThan(80);
-		expect(columns).toBeGreaterThan(0);
-		// The crop is centred horizontally, so pixels are skipped on both sides.
-		const sourceX = Number(/x=(\d+)/.exec(line)?.[1] ?? "0");
-		expect(sourceX).toBeGreaterThan(0);
-		expect(visibleWidth(line)).toBeLessThanOrEqual(60);
+		expect(Number(/c=(\d+)/.exec(line)?.[1] ?? "0")).toBe(80);
+		expect(line).not.toContain("x=");
 	});
 
 	test("no images -> placeholder, not a crash", () => {
@@ -416,14 +418,16 @@ describe("banner: terminal lifecycle", () => {
 		expect(again).toBe(first);
 	});
 
-	test("a resize crops the retransmitted frame to the new body", () => {
+	test("a resize retransmits the whole picture under a new id", () => {
 		const { terminal, component } = harness(40, 100);
-		// The default 44x20 picture fits a 33-row body verbatim.
 		expect(parseKittyRows(imageLines(component.render(100))[0]!)).toBe(20);
 		terminal.rows = 26;
 		const line = imageLines(component.render(100))[0]!;
-		expect(parseKittyRows(line)).toBeLessThan(20);
-		expect(line).toContain("h=");
+		// Same size, new id: kitty drops placements when the viewport changes, and
+		// pi's alt-screen path only re-sends the payload for an unknown id.
+		expect(parseKittyRows(line)).toBe(20);
+		expect(line).not.toContain("h=");
+		expect(line).not.toBe(imageSet().sequence);
 	});
 
 	test("a terminal without write() degrades silently", () => {

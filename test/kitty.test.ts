@@ -8,7 +8,6 @@ import {
 	encodeKittyStub,
 	encodeKittyDelete,
 	reassignKittyImageId,
-	cropKittyRoot,
 } from "../src/kitty.ts";
 import { parseKittyRows } from "../src/layout.ts";
 
@@ -243,58 +242,5 @@ describe("kitty: teardown and re-targeting", () => {
 
 	test("an id-less head gets one appended", () => {
 		expect(reassignKittyImageId("\x1b_Ga=T,f=100;AAAA\x1b\\", 5)).toBe("\x1b_Ga=T,f=100,i=5;AAAA\x1b\\");
-	});
-
-	test("cropping rewrites the source rect and the cell grid", () => {
-		const original = `\x1b_Ga=T,f=100,q=2,C=1,c=44,r=22,i=8;${payload(24)}\x1b\\`;
-		const cropped = cropKittyRoot(original, {
-			sourceX: 20,
-			sourceY: 60,
-			sourceWidth: 300,
-			sourceHeight: 150,
-			columns: 30,
-			rows: 10,
-		});
-		const head = paramsOf(commands(cropped)[0] ?? "");
-		expect(head).toContain("x=20");
-		expect(head).toContain("y=60");
-		expect(head).toContain("w=300");
-		expect(head).toContain("h=150");
-		expect(head).toContain("c=30");
-		expect(head).toContain("r=10");
-		// The original c=/r= are replaced, never duplicated.
-		expect(head).not.toContain("c=44");
-		expect(head).not.toContain("r=22");
-		// Transmission flags and the payload survive untouched.
-		expect(head).toContain("a=T");
-		expect(head).toContain("f=100");
-		expect(head).toContain("q=2");
-		expect(head).toContain("C=1");
-		expect(payloadOf(commands(cropped)[0] ?? "")).toBe(payload(24));
-	});
-
-	test("cropping an animated line keeps m=1 and every frame chunk", () => {
-		// A chunked root head carries `m=1`; cropping must not swallow it.
-		const animated = buildKittyLine({
-			images: {
-				sequence: `\x1b_Ga=T,f=100,q=2,C=1,c=44,r=22,i=8,m=1;${payload(4096)}\x1b\\\x1b_Gm=0;${payload(120)}\x1b\\`,
-				frames: [{ base64: payload(4) }],
-				gapMs: 50,
-			},
-			animate: true,
-			loopForever: true,
-		} as unknown as Parameters<typeof buildKittyLine>[0]);
-		const cropped = cropKittyRoot(animated, {
-			sourceX: 0,
-			sourceY: 10,
-			sourceWidth: 100,
-			sourceHeight: 200,
-			columns: 20,
-			rows: 8,
-		});
-		const chunks = commands(cropped);
-		expect(chunks.length).toBe(commands(animated).length);
-		expect(paramsOf(chunks[0] ?? "")).toContain("m=1");
-		expect(paramsOf(chunks[0] ?? "")).toContain("r=8");
 	});
 });

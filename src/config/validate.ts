@@ -9,7 +9,6 @@
 
 import {
 	DEFAULT_FILE,
-	IMAGE_FITS,
 	KITTY_MODES,
 	LIMITS,
 	PANEL_FIELDS,
@@ -20,7 +19,6 @@ import {
 	type AutoSize,
 	type BannerKittyMode,
 	type BannerRenderer,
-	type ImageFit,
 	type ImageSettings,
 	type LayoutSettings,
 	type PanelField,
@@ -192,7 +190,6 @@ export function validateSettings(raw: unknown): ValidatedSettings {
 			path: image.text("path"),
 			width: image.number("width", LIMITS.width, imageDefaults.width),
 			height: image.autoSize("height", LIMITS.height, imageDefaults.height),
-			fit: image.oneOf("fit", IMAGE_FITS, imageDefaults.fit as ImageFit),
 			fps: image.number("fps", LIMITS.fps, imageDefaults.fps),
 			stride: image.number("stride", LIMITS.stride, imageDefaults.stride),
 			renderer: image.oneOf("renderer", RENDERERS, imageDefaults.renderer as BannerRenderer),

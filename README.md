@@ -68,7 +68,6 @@ default for that key; a warning is shown in `/splash status`.
 | --- | --- | --- |
 | `image.path` | bundled artwork | GIF to animate (`~` is expanded) |
 | `image.width` / `image.height` | `44` / `"auto"` | Art size in cells; `"auto"` keeps the GIF's aspect ratio |
-| `image.fit` | `"crop"` | `crop` = fill the box, `contain` = letterbox inside it |
 | `image.fps` / `image.stride` | `16` / `3` | Playback rate, and "use every Nth frame" |
 | `image.renderer` | `"auto"` | `auto` picks the native image when the terminal supports it |
 | `image.native.mode` | `"anim"` | `anim` = terminal loops the frames itself; `frames` = resend per tick |
