@@ -89,11 +89,9 @@ if you want autocompletion in your editor.
 
 ## Credits
 
-- Inspiration: [beautiful-pi](https://github.com/danielmrdev/beautiful-pi) — a
-  `setHeader` splash with a `RESOURCES` box.
-- Built on [chafa](https://hpjansson.org/chafa/) for the art, `ffmpeg` for the
-  frames, and [`@earendil-works/pi-tui`](https://github.com/earendil-works/pi)
-  for the width tables.
+[beautiful-pi](https://github.com/danielmrdev/beautiful-pi) is the inspiration.
+
+[chafa](https://hpjansson.org/chafa/) draws the art, `ffmpeg` pulls the frames.
 
 Curious how it works? [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) has the module
 map, the data flow and the invariants. A native kitty-image version waits on the
