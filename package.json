@@ -17,7 +17,7 @@
 	],
 	"files": [
 		"src",
-		"assets",
+		"assets/banner.gif",
 		"docs",
 		"scripts",
 		"README.md",

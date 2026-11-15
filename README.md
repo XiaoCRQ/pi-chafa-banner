@@ -6,16 +6,9 @@ Your favourite GIF, redrawn as terminal character art and parked in [pi](https:/
 startup header — it scrolls away with the conversation, never steals focus, and
 never touches a keystroke.
 
-```
-        ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄         ╭──────────── RESOURCES ────────────╮
-        ███ the gif, rendered by chafa ███         │ [Context]                        │
-        ███ one frame at a time ██████████         │   ~/work/app/AGENTS.md           │
-        ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀         │ [Skills]                         │
-       ╭──────── (pi) CODING AGENT ────────╮        │   workflow-authoring             │
-       │ version  1.0.0                    │        │ [Extensions]                     │
-       │ model    claude-sonnet-4.5        │        │   pi-chafa-banner                │
-       ╰───────────────────────────────────╯        ╰──────────────────────────────────╯
-```
+![pi-chafa-banner inside pi: the chafa-rendered gif at the top left, the coding-agent card below it, the resources panel on the right](https://raw.githubusercontent.com/XiaoCRQ/pi-chafa-banner/main/assets/preview.png)
+
+<sub>A real session: gif on the left, <code>(pi) CODING AGENT</code> below it, resources on the right — tokyonight palette.</sub>
 
 ## Quick start
 

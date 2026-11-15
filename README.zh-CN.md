@@ -5,16 +5,9 @@
 把一张喜欢的 GIF 变成终端里的字符画，安稳地摆在 [pi](https://github.com/earendil-works/pi)
 的启动页——它会跟着对话一起往上滚，不抢焦点，也不碰你的键盘。
 
-```
-        ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄         ╭──────────── RESOURCES ────────────╮
-        ███ chafa 渲染出来的那一帧 ███████         │ [Context]                        │
-        ███ 一次只画一帧 █████████████████         │   ~/work/app/AGENTS.md           │
-        ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀         │ [Skills]                         │
-       ╭──────── (pi) CODING AGENT ────────╮        │   workflow-authoring             │
-       │ version  1.0.0                    │        │ [Extensions]                     │
-       │ model    claude-sonnet-4.5        │        │   pi-chafa-banner                │
-       ╰───────────────────────────────────╯        ╰──────────────────────────────────╯
-```
+![pi-chafa-banner 在 pi 里的样子：左上 chafa 字符画，下面是信息卡，右侧资源面板](https://raw.githubusercontent.com/XiaoCRQ/pi-chafa-banner/main/assets/preview.png)
+
+<sub>真机截图：左边字符画、下面 <code>(pi) CODING AGENT</code>、右侧资源面板——示例用的是 tokyonight 配色。</sub>
 
 ## 快速开始
 
