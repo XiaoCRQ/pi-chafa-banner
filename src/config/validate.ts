@@ -211,8 +211,6 @@ export function validateSettings(raw: unknown): ValidatedSettings {
 	return {
 		image: {
 			path: image.text("path"),
-			width: image.number("width", LIMITS.width, imageDefaults.width),
-			height: image.autoSize("height", LIMITS.height, imageDefaults.height),
 			fps: image.rate("fps", LIMITS.fps, imageDefaults.fps),
 			stride: image.number("stride", LIMITS.stride, imageDefaults.stride),
 			chafa: image.string("chafa", imageDefaults.chafa),

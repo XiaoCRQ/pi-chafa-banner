@@ -24,10 +24,6 @@ export type RateSetting = number | "auto";
 
 export interface ImageSettings {
 	path: string | undefined;
-	/** Character columns for the picture band. */
-	width: number;
-	/** Character rows, or `auto` = derive from the source aspect ratio. */
-	height: AutoSize;
 	fps: RateSetting;
 	stride: number;
 	/** Extra chafa arguments, exactly as the user typed them. */
@@ -35,9 +31,9 @@ export interface ImageSettings {
 }
 
 export interface LayoutSettings {
-	/** Overall splash width in cells (picture band and both columns). */
+	/** Overall splash width in cells; each of the two columns gets half of it. */
 	width: number;
-	/** Blank columns between the two lower panels. */
+	/** Blank columns between the picture/info column and the resource panel. */
 	gap: number;
 	/** Below this width the lower block stacks instead of splitting. */
 	twoColumnMinWidth: number;
@@ -71,9 +67,11 @@ export interface PanelsSettings {
 export interface BannerConfig {
 	version: 1;
 	gifPath: string | undefined;
+	/**
+	 * Chafa canvas, derived — never configured: `layout.width` split into two
+	 * equal columns (minus `layout.gap`), height from the gif's aspect ratio.
+	 */
 	size: BannerSize;
-	/** `true` when `size.height` came from `image.height: "auto"`. */
-	heightAuto: boolean;
 	fps: RateSetting;
 	stride: number;
 	/** Parsed `image.chafa` argv, ready to append to the pipeline's own flags. */
@@ -100,13 +98,11 @@ export const DEFAULT_FILE = {
 	version: 1,
 	image: {
 		path: "~/Pictures/logo/v-3.gif",
-		width: 44,
-		height: "auto",
 		fps: "auto",
 		stride: 3,
 		chafa: "",
 	},
-	layout: { width: 88, gap: 4, twoColumnMinWidth: 76, compactMinWidth: 32, maxWidth: 108, lowerRows: 12 },
+	layout: { width: 88, gap: 2, twoColumnMinWidth: 76, compactMinWidth: 32, maxWidth: 108, lowerRows: 12 },
 	panels: {
 		info: { enabled: true, fields: ["version", "model", "theme"] },
 		resources: {
@@ -143,6 +139,27 @@ export function clamp(value: number, min: number, max: number): number {
 
 export function formatSize(size: BannerSize): string {
 	return `${size.width}x${size.height}`;
+}
+
+/** Columns one of the two side-by-side blocks gets out of `blockWidth`. */
+export function columnWidthFor(blockWidth: number, gap: number): number {
+	const usable = Math.max(2, Math.floor(blockWidth) - Math.max(0, Math.floor(gap)));
+	return Math.max(1, Math.floor(usable / 2));
+}
+
+/** Rough height for a canvas width: a character cell is about twice as tall as wide. */
+export function autoHeightFor(width: number): number {
+	return clamp(Math.round(width / 2), LIMITS.height.min, LIMITS.height.max);
+}
+
+/**
+ * The chafa canvas the pipeline renders at, derived from the layout alone: the
+ * two columns are equal, so the artwork is exactly one column wide.
+ */
+export function derivedCanvas(layout: LayoutSettings): BannerSize {
+	const block = Math.min(layout.maxWidth, layout.width);
+	const width = clamp(columnWidthFor(block, layout.gap), LIMITS.width.min, LIMITS.width.max);
+	return { width, height: autoHeightFor(width) };
 }
 
 /** Absolute ceiling for the splash block, whatever the terminal reports. */

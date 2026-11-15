@@ -16,11 +16,12 @@
  */
 
 import type { Component, Theme, TUI } from "@earendil-works/pi-coding-agent";
-import type { BannerConfig } from "../config.ts";
+import { columnWidthFor, type BannerConfig } from "../config.ts";
 import type { FrameSet } from "../frames.ts";
 import { DEFAULT_FRAME_DELAY_MS } from "../pipeline/timing.ts";
 import { buildStatusLine, charPlaceholder, describeConfig, infoRows as infoRowsFor, sections as sectionsFor, statusLines as statusLinesFor } from "./panels.ts";
 import {
+	MIN_PANEL_WIDTH,
 	blockWidthFor,
 	centerBlock,
 	compactSplash,
@@ -33,7 +34,7 @@ import {
 	type ResourceSection,
 } from "../layout.ts";
 import type { BannerResources } from "../resources.ts";
-import { padVisible, truncateToWidth, visibleWidth, maxVisibleWidth } from "../text.ts";
+import { padVisible, truncateToWidth, visibleWidth } from "../text.ts";
 
 /** Info card: 3 content rows + 2 borders. */
 const INFO_BOX_ROWS = 5;
@@ -251,23 +252,19 @@ export class Banner implements Component {
 
 		const blockWidth = blockWidthFor(cols, layout);
 		const frame = this.currentFrame();
-		const imageWidth = frame ? Math.min(blockWidth, maxVisibleWidth(frame)) : 0;
 		const infoEnabled = this.config.panels.info.enabled;
 		const resourcesEnabled = this.config.panels.resources.enabled;
 
-		// The artwork sets the width of the left column; the info card never
-		// shrinks below 32 columns so its labels stay readable.
-		const leftWidth = Math.max(
-			Math.min(Math.max(imageWidth || 40, 32), blockWidth),
-			Math.min(imageWidth, blockWidth),
-		);
-		const rightWidth = blockWidth - leftWidth - this.gap();
+		// The two columns are always equal: `blockWidth` splits in half around the
+		// gap, and the canvas is built at exactly that width. A narrower frame (a
+		// gif with a different aspect ratio) is centered inside its column.
+		const column = columnWidthFor(blockWidth, this.gap());
 		const twoColumns =
-			infoEnabled && resourcesEnabled && blockWidth >= layout.twoColumnMinWidth && rightWidth >= 28;
+			infoEnabled && resourcesEnabled && blockWidth >= layout.twoColumnMinWidth && column >= MIN_PANEL_WIDTH;
 
-		const left = this.leftColumn(blockWidth, leftWidth, frame, twoColumns);
+		const left = this.leftColumn(blockWidth, twoColumns ? column : blockWidth, frame, twoColumns);
 		const right = resourcesEnabled
-			? resourcePanel("RESOURCES", this.sections(), twoColumns ? rightWidth : blockWidth, this.painter,
+			? resourcePanel("RESOURCES", this.sections(), twoColumns ? column : blockWidth, this.painter,
 					twoColumns ? left.length : this.stackedHeight(), {
 						maxLinesPerSection: this.config.panels.resources.maxLinesPerSection,
 					})

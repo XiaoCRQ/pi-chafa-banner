@@ -136,8 +136,8 @@ export interface SourceSize {
 /**
  * Pixel size of the artwork's first frame.
  *
- * Needed for `image.height: "auto"`: chafa wants a cell grid, and the only way
- * to keep the gif's aspect ratio is to know the source's.
+ * The canvas height is derived from the artwork's aspect ratio (the width is half
+ * of `layout.width`), and chafa wants a cell grid, so the source size is needed.
  */
 export async function probeSourceSize(gifPath: string, timeoutMs = 10_000): Promise<SourceSize> {
 	let stdout: string;

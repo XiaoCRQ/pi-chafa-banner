@@ -22,9 +22,9 @@ export async function buildContent(ctx: ExtensionContext, current: SessionState,
 	if (current.building) return;
 	current.building = true;
 	try {
-		// `height: "auto"` needs the artwork's aspect ratio: a cell is roughly twice
-		// as tall as it is wide, so a 2:1 gif at 44 columns wants 22 rows.
-		if (current.config.heightAuto && current.config.gifPath) {
+		// The canvas width is derived (half of `layout.width`); its height follows
+		// the artwork's aspect ratio, so probe the gif before rendering.
+		if (current.config.gifPath) {
 			try {
 				const source = await probeSourceSize(current.config.gifPath);
 				const applied = applySourceSize(current.config, source);
@@ -33,7 +33,7 @@ export async function buildContent(ctx: ExtensionContext, current: SessionState,
 					current.banner?.setConfig(applied);
 				}
 			} catch {
-				// Keep the width-derived guess; the build below reports real failures.
+				// Keep the rough guess; the build below reports real failures.
 			}
 		}
 		const colorMode = current.theme?.getColorMode() ?? "truecolor";
