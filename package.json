@@ -1,6 +1,6 @@
 {
 	"name": "pi-chafa-banner",
-	"version": "0.1.0",
+	"version": "1.0.0",
 	"description": "Animated chafa image splash rendered into pi's startup header",
 	"type": "module",
 	"private": true,
@@ -16,7 +16,8 @@
 		"src",
 		"types",
 		"assets",
-		"README.md"
+		"README.md",
+		"README.zh-CN.md"
 	],
 	"pi": {
 		"extensions": [

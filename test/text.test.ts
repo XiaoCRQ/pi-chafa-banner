@@ -90,6 +90,16 @@ describe("truncateToWidth", () => {
 		expect(stripAnsi(out)).toBe("中文…") // 4 + 1
 	});
 
+	test("clips the ellipsis into a budget it does not fit into", () => {
+		// pi-tui's `truncateFragmentToWidth`: a 1-column line still ends with `…`
+		// rather than going blank when the first grapheme is wider than the budget.
+		expect(stripAnsi(truncateToWidth("中文", 1, "…"))).toBe("…");
+		expect(stripAnsi(truncateToWidth("abcdef", 1, "..."))).toBe(".");
+		expect(stripAnsi(truncateToWidth("abcdef", 2, "..."))).toBe("..");
+		// Nothing fits at all -> still no overflow.
+		expect(truncateToWidth("中文", 0, "…")).toBe("");
+	});
+
 	test("never splits emoji grapheme clusters", () => {
 		expect(stripAnsi(truncateToWidth("👨‍👩‍👧x", 2, ""))).toBe("👨‍👩‍👧");
 		expect(visibleWidth(truncateToWidth("⌚⌚⌚", 5, "…"))).toBeLessThanOrEqual(5);

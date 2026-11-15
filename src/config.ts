@@ -7,7 +7,7 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
-import { fileURLToPath } from "node:url"
+import { fileURLToPath } from "node:url";
 
 export interface BannerSize {
 	width: number;
@@ -15,6 +15,17 @@ export interface BannerSize {
 }
 
 export type BannerRenderer = "auto" | "chars" | "kitty";
+
+/**
+ * How kitty images animate.
+ *
+ * - `anim`: one static image line plus kitty's own `a=f`/`a=a` animation
+ *   frames; the terminal loops them, so steady-state traffic is zero bytes and
+ *   pi sees an unchanged line (no diff, no re-render).
+ * - `frames`: re-send a root frame every tick (escape hatch for terminals that
+ *   ignore the animation opcodes; costs ~1 MB/s).
+ */
+export type BannerKittyMode = "anim" | "frames";
 
 export interface BannerConfig {
 	gifPath: string | undefined;
@@ -24,6 +35,18 @@ export interface BannerConfig {
 	renderer: BannerRenderer;
 	static: boolean;
 	enabled: boolean;
+	/** Detach pi's own `[Context]/[Skills]/…` listing below the splash. */
+	hideResources: boolean;
+	/** kitty only: native terminal animation or per-tick frame swaps. */
+	kittyMode: BannerKittyMode;
+	/** PNG palette size for quantized frames (16/32/64/128/256). */
+	palette: number;
+	/** Per-frame pixel cap; the pixel grid is scaled down to fit. */
+	maxPixels: number;
+	/** Upper bound on encoded frames; extras are decimated evenly. */
+	maxFrames: number;
+	/** 0 = loop forever, >0 = freeze the image after N seconds. */
+	animSeconds: number;
 }
 
 export const DEFAULTS = {
@@ -31,6 +54,12 @@ export const DEFAULTS = {
 	stride: 3,
 	size: { width: 44, height: 22 } satisfies BannerSize,
 	renderer: "auto" as BannerRenderer,
+	hideResources: true as boolean,
+	kittyMode: "anim" as BannerKittyMode,
+	palette: 128,
+	maxPixels: 640_000,
+	maxFrames: 24,
+	animSeconds: 0,
 } as const;
 
 /** Hard caps keep a mis-set env var from producing an unusable splash. */
@@ -39,6 +68,10 @@ export const LIMITS = {
 	stride: { min: 1, max: 10 },
 	width: { min: 8, max: 160 },
 	height: { min: 4, max: 60 },
+	palette: { min: 16, max: 256 },
+	maxPixels: { min: 10_000, max: 4_000_000 },
+	maxFrames: { min: 1, max: 120 },
+	animSeconds: { min: 0, max: 3600 },
 } as const;
 
 export const BANNER_MAX_WIDTH = 108;
@@ -78,9 +111,27 @@ export function parseBool(raw: string | undefined): boolean {
 	return /^(1|true|yes|on)$/i.test(raw.trim());
 }
 
+/** Same vocabulary as parseBool, but an unset/blank variable keeps the default. */
+export function parseBoolDefault(raw: string | undefined, fallback: boolean): boolean {
+	if (raw === undefined || raw.trim() === "") return fallback;
+	return parseBool(raw);
+}
+
 export function parseRenderer(raw: string | undefined): BannerRenderer {
 	const value = (raw ?? "").trim().toLowerCase();
 	return value === "chars" || value === "kitty" || value === "auto" ? value : DEFAULTS.renderer;
+}
+
+export function parseKittyMode(raw: string | undefined): BannerKittyMode {
+	return (raw ?? "").trim().toLowerCase() === "frames" ? "frames" : "anim";
+}
+
+/** Snap an arbitrary palette size to the nearest supported value (round down). */
+export function paletteOf(n: number): 16 | 32 | 64 | 128 | 256 {
+	const allowed = [16, 32, 64, 128, 256] as const;
+	let pick: 16 | 32 | 64 | 128 | 256 = 16;
+	for (const value of allowed) if (value <= n) pick = value;
+	return pick;
 }
 
 export function formatSize(size: BannerSize): string {
@@ -125,6 +176,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BannerConfig {
 	const size = parseSize(env.PI_BANNER_SIZE, DEFAULTS.size);
 	const fpsRaw = env.PI_BANNER_FPS ? Number(env.PI_BANNER_FPS) : DEFAULTS.fps;
 	const strideRaw = env.PI_BANNER_STRIDE ? Number(env.PI_BANNER_STRIDE) : DEFAULTS.stride;
+	const maxPxRaw = env.PI_BANNER_MAX_PX ? Number(env.PI_BANNER_MAX_PX) : DEFAULTS.maxPixels;
+	const maxFramesRaw = env.PI_BANNER_MAX_FRAMES ? Number(env.PI_BANNER_MAX_FRAMES) : DEFAULTS.maxFrames;
+	const animRaw = env.PI_BANNER_ANIM_SECONDS ? Number(env.PI_BANNER_ANIM_SECONDS) : DEFAULTS.animSeconds;
+	const paletteRaw = env.PI_BANNER_PALETTE ? Number(env.PI_BANNER_PALETTE) : DEFAULTS.palette;
 	return {
 		gifPath: defaultGifPath(env),
 		size,
@@ -133,6 +188,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BannerConfig {
 		renderer: parseRenderer(env.PI_BANNER_RENDERER),
 		static: parseBool(env.PI_BANNER_STATIC),
 		enabled: !parseBool(env.PI_BANNER_DISABLED),
+		hideResources: parseBoolDefault(env.PI_BANNER_HIDE_RESOURCES, DEFAULTS.hideResources),
+		kittyMode: parseKittyMode(env.PI_BANNER_KITTY_MODE),
+		palette: paletteOf(Number.isFinite(paletteRaw) ? paletteRaw : DEFAULTS.palette),
+		maxPixels: clamp(maxPxRaw, LIMITS.maxPixels.min, LIMITS.maxPixels.max),
+		maxFrames: clamp(maxFramesRaw, LIMITS.maxFrames.min, LIMITS.maxFrames.max),
+		animSeconds: clamp(animRaw, LIMITS.animSeconds.min, LIMITS.animSeconds.max),
 	};
 }
 
@@ -145,5 +206,7 @@ export function describeConfig(config: BannerConfig): string {
 		`stride=${config.stride}`,
 		`renderer=${config.renderer}`,
 		`static=${config.static}`,
+		`kitty=${config.kittyMode}`,
+		`palette=${config.palette}`,
 	].join("  ");
 }

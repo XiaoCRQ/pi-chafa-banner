@@ -20,7 +20,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { formatSize, piAgentDir, type BannerConfig, type BannerSize } from "./config.ts";
 import { padVisible, truncateToWidth, visibleWidth } from "./text.ts";
@@ -39,7 +38,7 @@ export interface FrameSet {
 
 export class FrameError extends Error {
 	constructor(
-		readonly code: "no-gif" | "missing-tool" | "ffmpeg" | "chafa" | "empty",
+		readonly code: "no-gif" | "missing-tool" | "ffmpeg" | "chafa" | "empty" | "image",
 		message: string,
 	) {
 		super(message);
@@ -47,8 +46,8 @@ export class FrameError extends Error {
 	}
 }
 
-const CACHE_VERSION = 1;
-const MAX_GIF_FRAMES = 240;
+export const CACHE_VERSION = 1;
+export const MAX_GIF_FRAMES = 240;
 
 // ---------------------------------------------------------------------------
 // process helpers
@@ -65,7 +64,7 @@ const OUTPUT_LIMIT = 32 * 1024 * 1024;
  * Spawn without a tty (stdin ignored). A pty would let chafa/ffmpeg interact
  * with the terminal and corrupt the running TUI.
  */
-function run(command: string, args: string[], timeoutMs = 20_000): Promise<RunResult> {
+export function run(command: string, args: string[], timeoutMs = 20_000): Promise<RunResult> {
 	return new Promise((resolve, reject) => {
 		const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
 		let stdout = "";
@@ -108,6 +107,16 @@ function run(command: string, args: string[], timeoutMs = 20_000): Promise<RunRe
 			finish(new Error(`${command} failed (${reason})${detail ? `: ${detail}` : ""}`));
 		});
 	});
+}
+
+/**
+ * Split the preflight result by what a renderer actually needs: the char
+ * renderer drives chafa *and* ffmpeg, the kitty renderer only needs ffmpeg (the
+ * PNGs are encoded, never rasterized into cells).
+ */
+export function missingToolsFor(result: PreflightResult, need: "chars" | "kitty"): string[] {
+	const required = need === "kitty" ? ["ffmpeg"] : ["chafa", "ffmpeg"];
+	return required.filter((bin) => result.missing.includes(bin));
 }
 
 export interface PreflightResult {
@@ -279,7 +288,7 @@ export function sanitizeFrame(raw: string, width: number, height: number): strin
  * builds do not know `-fps_mode`, so try the new spelling first and fall back.
  * The flag must come *after* `-i` (it is an output option).
  */
-async function extractFrames(gifPath: string, pattern: string, timeoutMs: number): Promise<void> {
+export async function extractFrames(gifPath: string, pattern: string, timeoutMs: number): Promise<void> {
 	const variants: string[][] = [["-fps_mode", "passthrough"], ["-vsync", "0"], []];
 	let lastError: unknown;
 	for (const variant of variants) {
@@ -338,7 +347,12 @@ export async function loadFrames(
 	}
 
 	const timeoutMs = options.timeoutMs ?? 20_000;
-	const workDir = await mkdtemp(join(tmpdir(), "pi-chafa-banner-"));
+	// Scratch space lives inside this gif's cache directory (invariant 8: writes
+	// only under ~/.pi/agent/tmp/pi-chafa-banner/<sha1>/), not in the system temp
+	// dir, so a killed process never litters /tmp with PNG frames.
+	const workRoot = dirname(cachePath);
+	await mkdir(workRoot, { recursive: true });
+	const workDir = await mkdtemp(join(workRoot, "work-"));
 	try {
 		const pattern = join(workDir, "f%03d.png");
 		await extractFrames(gifPath, pattern, Math.max(timeoutMs, 60_000));

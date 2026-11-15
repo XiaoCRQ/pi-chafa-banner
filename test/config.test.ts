@@ -11,7 +11,10 @@ import {
 	LIMITS,
 	loadConfig,
 	parseBool,
+	parseBoolDefault,
 	parseRenderer,
+	parseKittyMode,
+	paletteOf,
 	parseSize,
 	piAgentDir,
 } from "../src/config.ts";
@@ -52,6 +55,14 @@ describe("parseBool / parseRenderer", () => {
 		for (const value of ["0", "false", "no", "off", "", undefined]) expect(parseBool(value)).toBe(false);
 	});
 
+	test("parseBoolDefault keeps the fallback when the variable is unset", () => {
+		expect(parseBoolDefault(undefined, true)).toBe(true);
+		expect(parseBoolDefault("", false)).toBe(false);
+		expect(parseBoolDefault("   ", true)).toBe(true);
+		expect(parseBoolDefault("0", true)).toBe(false);
+		expect(parseBoolDefault("1", false)).toBe(true);
+	});
+
 	test("rejects unknown renderers", () => {
 		expect(parseRenderer("kitty")).toBe("kitty");
 		expect(parseRenderer("chars")).toBe("chars");
@@ -82,6 +93,7 @@ describe("loadConfig", () => {
 		expect(config.renderer).toBe("auto");
 		expect(config.static).toBe(false);
 		expect(config.enabled).toBe(true);
+		expect(config.hideResources).toBe(true);
 	});
 
 	test("reads every PI_BANNER_* variable", () => {
@@ -111,6 +123,19 @@ describe("loadConfig", () => {
 		const fast = loadConfig({ PI_CODING_AGENT_DIR: "/tmp/pi-agent", PI_BANNER_FPS: "999", PI_BANNER_STRIDE: "99" });
 		expect(fast.fps).toBe(LIMITS.fps.max);
 		expect(fast.stride).toBe(LIMITS.stride.max);
+	});
+
+	test("hides pi's resource listing by default, opt out on request", () => {
+		const base = { PI_CODING_AGENT_DIR: "/tmp/pi-agent" };
+		expect(loadConfig(base).hideResources).toBe(true);
+		expect(loadConfig({ ...base, PI_BANNER_HIDE_RESOURCES: "" }).hideResources).toBe(true);
+		expect(loadConfig({ ...base, PI_BANNER_HIDE_RESOURCES: "   " }).hideResources).toBe(true);
+		for (const value of ["1", "true", "yes", "on", "ON"]) {
+			expect(loadConfig({ ...base, PI_BANNER_HIDE_RESOURCES: value }).hideResources).toBe(true);
+		}
+		for (const value of ["0", "false", "no", "off", "OFF"]) {
+			expect(loadConfig({ ...base, PI_BANNER_HIDE_RESOURCES: value }).hideResources).toBe(false);
+		}
 	});
 });
 
@@ -151,5 +176,48 @@ describe("formatSize / describeConfig", () => {
 
 	test("max banner width is a sane constant", () => {
 		expect(BANNER_MAX_WIDTH).toBeGreaterThanOrEqual(80);
+	});
+});
+
+describe("kitty config knobs", () => {
+	test("parseKittyMode defaults to anim and only accepts frames", () => {
+		expect(parseKittyMode("frames")).toBe("frames");
+		expect(parseKittyMode("FRAMES")).toBe("frames");
+		expect(parseKittyMode("anim")).toBe("anim");
+		expect(parseKittyMode("ANIM")).toBe("anim");
+		expect(parseKittyMode(undefined)).toBe("anim");
+		expect(parseKittyMode("garbage")).toBe("anim");
+	});
+
+	test("paletteOf rounds down to a supported palette size", () => {
+		expect(paletteOf(100)).toBe(64);
+		expect(paletteOf(300)).toBe(256);
+		expect(paletteOf(8)).toBe(16);
+		expect(paletteOf(128)).toBe(128);
+	});
+
+	test("reads the image env vars and clamps them", () => {
+		const config = loadConfig({
+			PI_CODING_AGENT_DIR: "/tmp/pi-agent",
+			PI_BANNER_KITTY_MODE: "frames",
+			PI_BANNER_PALETTE: "200",
+			PI_BANNER_MAX_PX: "1",
+			PI_BANNER_MAX_FRAMES: "900",
+			PI_BANNER_ANIM_SECONDS: "5",
+		});
+		expect(config.kittyMode).toBe("frames");
+		// Normalized on read, so the pipeline never sees an unsupported depth.
+		expect(config.palette).toBe(128);
+		expect(loadConfig({ PI_CODING_AGENT_DIR: "/tmp/pi-agent", PI_BANNER_PALETTE: "64" }).palette).toBe(64);
+		expect(loadConfig({ PI_CODING_AGENT_DIR: "/tmp/pi-agent", PI_BANNER_PALETTE: "8" }).palette).toBe(16);
+		expect(config.maxPixels).toBe(LIMITS.maxPixels.min);
+		expect(config.maxFrames).toBe(LIMITS.maxFrames.max);
+		expect(config.animSeconds).toBe(5);
+	});
+
+	test("describeConfig mentions the kitty knobs", () => {
+		const text = describeConfig(loadConfig({ PI_CODING_AGENT_DIR: "/tmp/pi-agent" }));
+		expect(text).toContain("kitty=anim");
+		expect(text).toContain("palette=128");
 	});
 });

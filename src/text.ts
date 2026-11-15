@@ -15,9 +15,33 @@
  * `\p{RGI_Emoji}` (constructed dynamically so older runtimes degrade safely).
  */
 
-// CSI, OSC, and short ESC sequences. Chafa only emits SGR (CSI ... m) and
-// cursor/clear codes, but themes add OSC-8 links, so handle both.
-const ANSI_RE = /\x1b\[[0-9;:?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]/g;
+// CSI, OSC, APC, and short ESC sequences. Chafa only emits SGR (CSI ... m) and
+// cursor/clear codes, but themes add OSC-8 links and kitty images are APC
+// (`ESC _ G ... ST`), so handle all three. The APC branch only swallows the
+// sequence when it is *terminated* (BEL or ST); an unterminated APC falls
+// through to the generic `\x1b[@-_]` branch, which mirrors pi-tui's
+// `ansiCodeLength` returning 0 there (the payload then counts as visible).
+const ANSI_RE =
+	/\x1b\[[0-9;:?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b_[^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]/g;
+
+// kitty graphics protocol and iTerm2 inline images both arrive as zero-width
+// control sequences that span one "line" but occupy a whole cell block.
+export const KITTY_IMAGE_PREFIX = "\x1b_G";
+export const ITERM2_IMAGE_PREFIX = "\x1b]1337;File=";
+
+/**
+ * Whether a rendered line carries an inline image. Byte-for-byte the same
+ * semantics as pi-tui's `isImageLine` (terminal-image.ts), which is not
+ * re-exported from the package entry point.
+ */
+export function isImageLine(line: string): boolean {
+	return (
+		line.startsWith(KITTY_IMAGE_PREFIX) ||
+		line.startsWith(ITERM2_IMAGE_PREFIX) ||
+		line.includes(KITTY_IMAGE_PREFIX) ||
+		line.includes(ITERM2_IMAGE_PREFIX)
+	);
+}
 
 export function stripAnsi(input: string): string {
 	return input.replace(ANSI_RE, "");
@@ -170,8 +194,32 @@ export function codePointWidth(cp: number, cpStr: string): number {
 const WIDTH_CACHE_SIZE = 512;
 const widthCache = new Map<string, number>();
 
+/**
+ * Visible width of a line that carries an inline image: only the text outside
+ * the escape sequences occupies cells. For our banner that is the left padding
+ * before the sequence (the image itself is placed on the reserved cell block).
+ * Scanning only the head and tail keeps multi-megabyte payloads off the regex
+ * and the width cache.
+ */
+function imageLineWidth(line: string): number {
+	const first = line.indexOf("\x1b");
+	const stEnd = line.lastIndexOf("\x1b\\");
+	const belEnd = line.lastIndexOf("\x07");
+	const tailStart = Math.max(stEnd >= 0 ? stEnd + 2 : -1, belEnd >= 0 ? belEnd + 1 : -1);
+	if (tailStart < 0) {
+		// Malformed (unterminated) APC: pi-tui's `ansiCodeLength` returns 0, so
+		// the payload is visible text and only the ESC bytes are zero-width.
+		return visibleWidth(line.replace(/\x1b/g, ""));
+	}
+	let width = first > 0 ? visibleWidth(line.slice(0, first)) : 0;
+	if (tailStart < line.length) width += imageLineWidth(line.slice(tailStart));
+	return width;
+}
+
 export function visibleWidth(input: string): number {
 	if (input.length === 0) return 0;
+	// Inline images measure as their surrounding text only (prefix padding).
+	if (isImageLine(input)) return imageLineWidth(input);
 	// Fast path: printable ASCII (the common case for box borders and names).
 	let ascii = true;
 	for (let i = 0; i < input.length; i++) {
@@ -206,6 +254,9 @@ export function maxVisibleWidth(lines: readonly string[]): number {
 }
 
 function padWithSpaces(line: string, target: number): string {
+	// Never touch an image line: trailing spaces would be interpreted by pi-tui
+	// as a visible continuation row and break the reserved-row accounting.
+	if (isImageLine(line)) return line;
 	const gap = target - visibleWidth(line);
 	return gap > 0 ? line + " ".repeat(gap) : line;
 }
@@ -273,12 +324,18 @@ function* tokens(text: string): Generator<Token> {
  * `maxWidth` (pi-tui semantics).
  */
 export function truncateToWidth(text: string, maxWidth: number, ellipsis = "...", pad = false): string {
+	// Image sequences are atomic and zero-width; cutting them corrupts the
+	// protocol. `pad` is ignored for the same reason (see padWithSpaces).
+	if (isImageLine(text)) return text;
 	const limit = Math.max(0, maxWidth);
 	if (visibleWidth(text) <= limit) return pad ? padWithSpaces(text, limit) : text;
 
 	const ellipsisWidth = visibleWidth(ellipsis);
-	// If the ellipsis alone eats the budget, degrade to a hard width cut.
-	const target = ellipsisWidth >= limit ? limit : limit - ellipsisWidth;
+	// When the ellipsis cannot fit either, pi-tui drops the text and clips the
+	// ellipsis into the whole budget (`truncateFragmentToWidth`) instead of
+	// showing an ellipsis-less cut.
+	const clipped = ellipsisWidth >= limit;
+	const target = clipped ? 0 : limit - ellipsisWidth;
 	let out = "";
 	let width = 0;
 	let sawAnsi = false;
@@ -295,10 +352,34 @@ export function truncateToWidth(text: string, maxWidth: number, ellipsis = "..."
 		width += token.width;
 	}
 
-	out += ellipsisWidth >= limit ? "" : ellipsis;
+	out += clipped ? truncateEllipsis(ellipsis, limit - width) : ellipsis;
 	// Close any SGR left open by the theme wrapper we cut through.
 	if (sawAnsi) out += "\x1b[0m";
 	return pad ? padWithSpaces(out, limit) : out;
+}
+
+/**
+ * Widest prefix of `ellipsis` that fits in `budget` columns.
+ *
+ * pi-tui clips the ellipsis into the remaining budget when it does not fit
+ * (`truncateFragmentToWidth`), so a 1-column line ends with `…`/`.` instead of
+ * going blank. Matching that keeps our output identical to pi's on narrow box
+ * titles and panel rows.
+ */
+function truncateEllipsis(ellipsis: string, budget: number): string {
+	if (budget <= 0) return "";
+	let out = "";
+	let width = 0;
+	for (const token of tokens(ellipsis)) {
+		if (token.ansi) {
+			out += token.text;
+			continue;
+		}
+		if (width + token.width > budget) break;
+		out += token.text;
+		width += token.width;
+	}
+	return out;
 }
 
 /** Visible-column slice, ANSI preserved. Used to clip images that are wider than the terminal. */

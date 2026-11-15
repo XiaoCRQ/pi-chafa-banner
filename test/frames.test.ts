@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { BUNDLED_GIF_PATH, DEFAULTS, type BannerConfig } from "../src/config.ts";
 import {
 	cacheRoot,
@@ -174,5 +174,29 @@ describe("loadFrames", () => {
 		expect(await clearCache(config, "truecolor")).toBe(true);
 		const third = await loadFrames(config, "truecolor", { force: true });
 		expect(third.fromCache).toBe(false);
+	}, 120_000);
+
+	test.skipIf(!hasTools || !hasGif)("keeps its ffmpeg scratch dir inside the cache dir", async () => {
+		// Invariant 8: nothing is written outside ~/.pi/agent/tmp/pi-chafa-banner/.
+		process.env.PI_CODING_AGENT_DIR = tempAgentDir;
+		const staging = join(tempAgentDir, "tmp", "pi-chafa-banner");
+		const tmpBefore = new Set(await readdir(tmpdir()));
+		const config: BannerConfig = {
+			...DEFAULTS,
+			gifPath,
+			size: { width: 16, height: 8 },
+			stride: 60,
+			enabled: true,
+			renderer: "auto",
+			static: false,
+		};
+		await loadFrames(config, "truecolor", { force: true });
+		const added = (await readdir(tmpdir())).filter((name) => !tmpBefore.has(name));
+		expect(added.filter((name) => name.startsWith("pi-chafa"))).toEqual([]);
+		if (existsSync(staging)) {
+			const leftovers = (await readdir(staging)).filter((name) => name.startsWith("work-"));
+			expect(leftovers).toEqual([]);
+		}
+		await clearCache(config, "truecolor");
 	}, 120_000);
 });

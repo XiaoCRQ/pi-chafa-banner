@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Banner } from "../src/banner.ts";
 import { DEFAULTS, type BannerConfig } from "../src/config.ts";
-import { plainPainter } from "../src/layout.ts";
+import { CHROME_ROWS, plainPainter } from "../src/layout.ts";
 import type { FrameSet } from "../src/frames.ts";
 import { emptyResources, type BannerResources } from "../src/resources.ts";
 import type { Theme, TUI } from "@earendil-works/pi-coding-agent";
@@ -131,6 +131,17 @@ describe("Banner degraded states", () => {
 		const { banner } = makeBanner({ frames: frames(), rows: 18 });
 		const lines = banner.render(100);
 		expect(lines.join("\n")).toContain("(pi) CODING AGENT");
+		banner.dispose();
+	});
+
+	test("chars mode keeps the pre-image crop budget (chars scroll away, images cannot)", () => {
+		// `renderImage()` must fit `rows - CHROME_ROWS`, but the character path is a
+		// plain document block: an over-tall splash just scrolls with the chat, which
+		// is the shipped v1.0 behaviour we must not change (byte-identical output).
+		const { banner } = makeBanner({ frames: frames(), rows: 30 });
+		const lines = banner.render(60);
+		expect(lines.length).toBeGreaterThan(30 - CHROME_ROWS);
+		for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(60);
 		banner.dispose();
 	});
 

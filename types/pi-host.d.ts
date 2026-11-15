@@ -46,6 +46,8 @@ declare module "@earendil-works/pi-coding-agent" {
 	export interface TerminalLike {
 		rows: number;
 		columns: number;
+		/** pi-tui's `Terminal.write`: synchronous stdout write, used to free kitty images. */
+		write?(data: string): void;
 	}
 
 	export interface TUI {
