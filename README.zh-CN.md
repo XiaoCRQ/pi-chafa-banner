@@ -88,11 +88,10 @@ pi 的 stdin）、`--animate`（会破坏一帧一帧的输出）、`--clear`（
 
 ## 致谢
 
-- [beautiful-pi](https://github.com/danielmrdev/beautiful-pi)（MIT）：`setHeader`
-  双栏 + `RESOURCES` 面板的灵感来源，未复制代码。
-- [chafa](https://hpjansson.org/chafa/) 把像素变成字符，`ffmpeg` 从 GIF 里抽出
-  每一帧，[`@earendil-works/pi-tui`](https://github.com/earendil-works/pi) 提供
-  排版所用的宽度表。
+- 灵感来源：[beautiful-pi](https://github.com/danielmrdev/beautiful-pi)——用
+  `setHeader` 做带 `RESOURCES` 面板的启动页。
+- 依赖：[chafa](https://hpjansson.org/chafa/) 渲染字符画，`ffmpeg` 抽帧，
+  [`@earendil-works/pi-tui`](https://github.com/earendil-works/pi) 提供宽度表。
 
 想了解实现：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 里有模块划分、数据流和
 不变式。kitty 原生图片版本留在 `archive/kitty-native-images` 分支，等以后再说。
