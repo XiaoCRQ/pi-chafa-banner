@@ -1,23 +1,29 @@
 {
 	"name": "pi-chafa-banner",
-	"version": "1.0.0",
-	"description": "Animated chafa image splash rendered into pi's startup header",
+	"version": "2.0.0",
+	"description": "Animated splash header for pi: chafa character art, or the real picture on kitty terminals",
 	"type": "module",
-	"private": true,
+	"private": false,
 	"license": "MIT",
 	"keywords": [
 		"pi-package",
 		"pi-extension",
 		"chafa",
 		"banner",
-		"splash"
+		"splash",
+		"kitty-graphics",
+		"ascii-art"
 	],
 	"files": [
 		"src",
 		"types",
 		"assets",
+		"docs",
 		"README.md",
-		"README.zh-CN.md"
+		"README.zh-CN.md",
+		"LICENSE",
+		"pi-chafa-banner.example.json",
+		"pi-chafa-banner.schema.json"
 	],
 	"pi": {
 		"extensions": [
@@ -46,5 +52,13 @@
 	"devDependencies": {
 		"@types/bun": "^1.3.0",
 		"typescript": "^5.9.0"
+	},
+	"author": "XiaoCRQ",
+	"engines": {
+		"node": ">=20"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/XiaoCRQ/pi-chafa-banner.git"
 	}
 }

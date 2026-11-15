@@ -1,0 +1,217 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/XiaoCRQ/pi-chafa-banner/pi-chafa-banner.schema.json",
+  "title": "pi-chafa-banner configuration",
+  "description": "Startup splash for the pi coding agent: animated gif on the left, model/resource panels on the right. Every key is optional; a missing or invalid key falls back to the default.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": {
+      "description": "Config format version. Currently 1; other values are read anyway with a warning.",
+      "type": "integer",
+      "default": 1
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "path": {
+          "description": "Gif to animate. Absolute, or relative to the directory holding this file. '~' is expanded. Default: ~/Pictures/logo/v-3.gif, then the bundled assets/banner.gif.",
+          "type": "string"
+        },
+        "width": {
+          "description": "Width of the whole splash block, in terminal columns.",
+          "type": "integer",
+          "minimum": 8,
+          "maximum": 160,
+          "default": 44
+        },
+        "height": {
+          "description": "Height of the image, in terminal rows. 'auto' derives it from the width and the gif's aspect ratio.",
+          "oneOf": [{ "type": "integer", "minimum": 4, "maximum": 60 }, { "const": "auto" }],
+          "default": "auto"
+        },
+        "fit": {
+          "description": "crop = keep the art full width and cut rows from the top when the terminal is short; contain = scale the art down until everything fits.",
+          "enum": ["crop", "contain"],
+          "default": "crop"
+        },
+        "fps": {
+          "description": "Animation frames per second.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30,
+          "default": 16
+        },
+        "stride": {
+          "description": "Keep every Nth gif frame; higher is smaller and faster.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "default": 3
+        },
+        "renderer": {
+          "description": "auto = native pixels when the terminal supports them, else characters. chars = always chafa. kitty = require native pixels (one notice when unavailable).",
+          "enum": ["auto", "chars", "kitty"],
+          "default": "auto"
+        },
+        "native": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "mode": {
+              "description": "anim = the terminal loops the frames itself (0 bytes/s at rest). frames = retransmit one frame per tick (expensive).",
+              "enum": ["anim", "frames"],
+              "default": "anim"
+            },
+            "palette": {
+              "description": "PNG palette size; snapped down to the nearest of 16/32/64/128/256.",
+              "type": "integer",
+              "minimum": 16,
+              "maximum": 256,
+              "default": 128
+            },
+            "maxPixels": {
+              "description": "Pixel ceiling per frame.",
+              "type": "integer",
+              "minimum": 10000,
+              "maximum": 4000000,
+              "default": 640000
+            },
+            "maxFrames": {
+              "description": "Frames kept after decimation.",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 120,
+              "default": 24
+            },
+            "animSeconds": {
+              "description": "0 = loop forever; >0 = freeze into a still after N seconds.",
+              "type": "number",
+              "minimum": 0,
+              "maximum": 3600,
+              "default": 0
+            }
+          }
+        }
+      }
+    },
+    "layout": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "width": {
+          "description": "Preferred total width of the splash block, in columns. Capped by the terminal and by maxWidth.",
+          "type": "integer",
+          "minimum": 24,
+          "maximum": 200,
+          "default": 88
+        },
+        "gap": {
+          "description": "Blank columns between the two lower panels.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 12,
+          "default": 4
+        },
+        "twoColumnMinWidth": {
+          "description": "Below this width the lower block stacks instead of splitting into two panels.",
+          "type": "integer",
+          "minimum": 24,
+          "maximum": 200,
+          "default": 76
+        },
+        "compactMinWidth": {
+          "description": "Below this width the splash degrades to three plain lines.",
+          "type": "integer",
+          "minimum": 8,
+          "maximum": 200,
+          "default": 32
+        },
+        "maxWidth": {
+          "description": "Hard ceiling for the splash block, whatever the terminal says.",
+          "type": "integer",
+          "minimum": 24,
+          "maximum": 200,
+          "default": 108
+        },
+        "lowerRows": {
+          "description": "Rows reserved for the panels below the image.",
+          "type": "integer",
+          "minimum": 4,
+          "maximum": 40,
+          "default": 12
+        }
+      }
+    },
+    "panels": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "info": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "fields": {
+              "description": "Which facts the coding-agent box shows, in order.",
+              "type": "array",
+              "items": { "enum": ["version", "model", "theme", "gif", "frames", "renderer"] }
+            }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "sections": {
+              "description": "Which resource groups the right-hand box lists.",
+              "type": "array",
+              "items": { "enum": ["context", "skills", "themes", "extensions"] }
+            },
+            "width": {
+              "description": "Preferred width of the resources box; 'auto' shares the row with the info box.",
+              "oneOf": [{ "type": "integer", "minimum": 16, "maximum": 200 }, { "const": "auto" }],
+              "default": "auto"
+            },
+            "height": {
+              "description": "Preferred height of the resources box; 'auto' grows with the content.",
+              "oneOf": [{ "type": "integer", "minimum": 4, "maximum": 40 }, { "const": "auto" }],
+              "default": "auto"
+            },
+            "maxLinesPerSection": {
+              "description": "Lines each section may use before its items get truncated.",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 40,
+              "default": 6
+            }
+          }
+        }
+      }
+    },
+    "behavior": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": {
+          "description": "false = do not install the header at all.",
+          "type": "boolean",
+          "default": true
+        },
+        "static": {
+          "description": "true = render one frame and never start a timer.",
+          "type": "boolean",
+          "default": false
+        },
+        "hidePiResourceList": {
+          "description": "true = remove pi's own [Context]/[Skills]/… listing below the splash.",
+          "type": "boolean",
+          "default": true
+        }
+      }
+    }
+  }
+}

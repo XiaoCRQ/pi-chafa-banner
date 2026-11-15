@@ -1,223 +1,194 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, it } from "bun:test";
+import { join } from "node:path";
 import {
-	BANNER_MAX_WIDTH,
-	BUNDLED_GIF_PATH,
-	clamp,
 	DEFAULTS,
-	defaultGifPath,
+	applySourceSize,
+	autoHeightFor,
+	configPath,
 	describeConfig,
-	expandHome,
-	formatSize,
-	LIMITS,
+	describeConfigSource,
 	loadConfig,
-	parseBool,
-	parseBoolDefault,
-	parseRenderer,
-	parseKittyMode,
 	paletteOf,
 	parseSize,
-	piAgentDir,
+	pluginRoot,
+	validateSettings,
 } from "../src/config.ts";
-import { homedir } from "node:os";
-import { join } from "node:path";
 
-describe("clamp", () => {
-	test("bounds values", () => {
-		expect(clamp(0, 1, 10)).toBe(1);
-		expect(clamp(99, 1, 10)).toBe(10);
-		expect(clamp(5, 1, 10)).toBe(5);
-	});
-});
+const ROOT = "/tmp/plugin-root";
 
-describe("parseSize", () => {
-	test("parses WxH with x, X or *", () => {
-		expect(parseSize("44x22")).toEqual({ width: 44, height: 22 });
-		expect(parseSize("40X20")).toEqual({ width: 40, height: 20 });
-		expect(parseSize(" 30*10 ")).toEqual({ width: 30, height: 10 });
+/** Load a JSON text as if it were `<ROOT>/pi-chafa-banner.json`. */
+function load(json: string | undefined) {
+	return loadConfig({ root: ROOT, read: (path) => (path === configPath(ROOT) ? json : undefined) });
+}
+
+describe("config: file discovery", () => {
+	it("looks for pi-chafa-banner.json inside the package root", () => {
+		expect(configPath(ROOT)).toBe(join(ROOT, "pi-chafa-banner.json"));
 	});
 
-	test("clamps into the supported range", () => {
-		expect(parseSize("1x1")).toEqual({ width: LIMITS.width.min, height: LIMITS.height.min });
-		expect(parseSize("999x999")).toEqual({ width: LIMITS.width.max, height: LIMITS.height.max });
+	it("resolves the package root by walking up to a package.json", () => {
+		const root = pluginRoot();
+		expect(root.endsWith("pi-chafa-banner")).toBe(true);
 	});
 
-	test("falls back on garbage", () => {
-		expect(parseSize(undefined)).toEqual(DEFAULTS.size);
-		expect(parseSize("")).toEqual(DEFAULTS.size);
-		expect(parseSize("wide")).toEqual(DEFAULTS.size);
-		expect(parseSize("44")).toEqual(DEFAULTS.size);
-	});
-});
-
-describe("parseBool / parseRenderer", () => {
-	test("understands the usual truthy spellings", () => {
-		for (const value of ["1", "true", "yes", "on", "TRUE"]) expect(parseBool(value)).toBe(true);
-		for (const value of ["0", "false", "no", "off", "", undefined]) expect(parseBool(value)).toBe(false);
-	});
-
-	test("parseBoolDefault keeps the fallback when the variable is unset", () => {
-		expect(parseBoolDefault(undefined, true)).toBe(true);
-		expect(parseBoolDefault("", false)).toBe(false);
-		expect(parseBoolDefault("   ", true)).toBe(true);
-		expect(parseBoolDefault("0", true)).toBe(false);
-		expect(parseBoolDefault("1", false)).toBe(true);
-	});
-
-	test("rejects unknown renderers", () => {
-		expect(parseRenderer("kitty")).toBe("kitty");
-		expect(parseRenderer("chars")).toBe("chars");
-		expect(parseRenderer("auto")).toBe("auto");
-		expect(parseRenderer("sixel")).toBe("auto");
-		expect(parseRenderer(undefined)).toBe("auto");
-	});
-});
-
-describe("expandHome / piAgentDir", () => {
-	test("expands a leading tilde", () => {
-		expect(expandHome("~/x")).toBe(`${homedir()}/x`);
-		expect(expandHome("/abs/x")).toBe("/abs/x");
-	});
-
-	test("honours PI_CODING_AGENT_DIR", () => {
-		expect(piAgentDir({ PI_CODING_AGENT_DIR: "/tmp/pi-agent" })).toBe("/tmp/pi-agent");
-		expect(piAgentDir({})).toBe(`${homedir()}/.pi/agent`);
-	});
-});
-
-describe("loadConfig", () => {
-	test("applies defaults", () => {
-		const config = loadConfig({ PI_CODING_AGENT_DIR: "/tmp/pi-agent" });
+	it("falls back to built-in defaults when the file is absent", () => {
+		const config = load(undefined);
 		expect(config.size).toEqual(DEFAULTS.size);
 		expect(config.fps).toBe(DEFAULTS.fps);
-		expect(config.stride).toBe(DEFAULTS.stride);
-		expect(config.renderer).toBe("auto");
-		expect(config.static).toBe(false);
-		expect(config.enabled).toBe(true);
-		expect(config.hideResources).toBe(true);
+		expect(config.source.path).toBeUndefined();
+		expect(config.source.warnings).toEqual([]);
+		expect(describeConfigSource(config)).toContain("built-in defaults");
 	});
+});
 
-	test("reads every PI_BANNER_* variable", () => {
-		const config = loadConfig({
-			PI_CODING_AGENT_DIR: "/tmp/pi-agent",
-			PI_BANNER_FPS: "24",
-			PI_BANNER_STRIDE: "5",
-			PI_BANNER_SIZE: "60x30",
-			PI_BANNER_RENDERER: "kitty",
-			PI_BANNER_STATIC: "1",
-			PI_BANNER_DISABLED: "1",
-			PI_BANNER_GIF: "/tmp/demo.gif",
-		});
-		expect(config.fps).toBe(24);
-		expect(config.stride).toBe(5);
-		expect(config.size).toEqual({ width: 60, height: 30 });
-		expect(config.renderer).toBe("kitty");
+describe("config: reading values", () => {
+	it("applies a complete file", () => {
+		const config = load(
+			JSON.stringify({
+				version: 1,
+				image: { path: "/art/cat.gif", width: 60, height: 18, fit: "contain", fps: 12, stride: 2, renderer: "chars" },
+				layout: { width: 100, gap: 6, lowerRows: 14 },
+				panels: { info: { enabled: false, fields: ["model"] }, resources: { sections: ["skills"], maxLinesPerSection: 3 } },
+				behavior: { static: true, hidePiResourceList: false },
+			}),
+		);
+		expect(config.gifPath).toBe("/art/cat.gif");
+		expect(config.size).toEqual({ width: 60, height: 18 });
+		expect(config.heightAuto).toBe(false);
+		expect(config.fit).toBe("contain");
+		expect(config.fps).toBe(12);
+		expect(config.stride).toBe(2);
+		expect(config.renderer).toBe("chars");
+		expect(config.layout).toMatchObject({ width: 100, gap: 6, lowerRows: 14 });
+		expect(config.panels.info).toEqual({ enabled: false, fields: ["model"] });
+		expect(config.panels.resources.sections).toEqual(["skills"]);
+		expect(config.panels.resources.maxLinesPerSection).toBe(3);
 		expect(config.static).toBe(true);
-		expect(config.enabled).toBe(false);
-		expect(config.gifPath).toBe("/tmp/demo.gif");
+		expect(config.hideResources).toBe(false);
+		expect(config.source.path).toBe(configPath(ROOT));
 	});
 
-	test("clamps fps and stride", () => {
-		const slow = loadConfig({ PI_CODING_AGENT_DIR: "/tmp/pi-agent", PI_BANNER_FPS: "0", PI_BANNER_STRIDE: "0" });
-		expect(slow.fps).toBe(LIMITS.fps.min);
-		expect(slow.stride).toBe(LIMITS.stride.min);
-		const fast = loadConfig({ PI_CODING_AGENT_DIR: "/tmp/pi-agent", PI_BANNER_FPS: "999", PI_BANNER_STRIDE: "99" });
-		expect(fast.fps).toBe(LIMITS.fps.max);
-		expect(fast.stride).toBe(LIMITS.stride.max);
+	it("keeps defaults for keys the file omits", () => {
+		const config = load(JSON.stringify({ image: { width: 50 } }));
+		expect(config.size.width).toBe(50);
+		expect(config.fps).toBe(DEFAULTS.fps);
+		expect(config.layout).toEqual(DEFAULTS.layout);
+		expect(config.panels).toEqual(DEFAULTS.panels);
 	});
 
-	test("hides pi's resource listing by default, opt out on request", () => {
-		const base = { PI_CODING_AGENT_DIR: "/tmp/pi-agent" };
-		expect(loadConfig(base).hideResources).toBe(true);
-		expect(loadConfig({ ...base, PI_BANNER_HIDE_RESOURCES: "" }).hideResources).toBe(true);
-		expect(loadConfig({ ...base, PI_BANNER_HIDE_RESOURCES: "   " }).hideResources).toBe(true);
-		for (const value of ["1", "true", "yes", "on", "ON"]) {
-			expect(loadConfig({ ...base, PI_BANNER_HIDE_RESOURCES: value }).hideResources).toBe(true);
-		}
-		for (const value of ["0", "false", "no", "off", "OFF"]) {
-			expect(loadConfig({ ...base, PI_BANNER_HIDE_RESOURCES: value }).hideResources).toBe(false);
-		}
+	it("resolves a relative image path against the package root and expands ~", () => {
+		expect(load(JSON.stringify({ image: { path: "art/x.gif" } })).gifPath).toBe(join(ROOT, "art", "x.gif"));
+		expect(load(JSON.stringify({ image: { path: "~/a.gif" } })).gifPath).toContain("a.gif");
+		expect(load(JSON.stringify({ image: { path: "~/a.gif" } })).gifPath?.startsWith("~")).toBe(false);
+	});
+
+	it("describes itself for /splash status", () => {
+		const text = describeConfig(load(JSON.stringify({ image: { width: 50, height: 25 } })));
+		expect(text).toContain("image=50x25");
+		expect(text).toContain("layout=88");
 	});
 });
 
-describe("defaultGifPath", () => {
-	test("prefers the bundled artwork over every home-directory location", () => {
-		// The repo ships assets/banner.gif precisely so a fresh clone renders with
-		// no setup; an unrelated ~/Pictures/logo/v-1.gif must not win over it.
-		expect(defaultGifPath({}, BUNDLED_GIF_PATH)).toBe(BUNDLED_GIF_PATH);
+describe("config: auto height", () => {
+	it("derives the height from the width when height is auto", () => {
+		const config = load(JSON.stringify({ image: { width: 60 } }));
+		expect(config.heightAuto).toBe(true);
+		expect(config.size.height).toBe(autoHeightFor(60));
 	});
 
-	test("explicit PI_BANNER_GIF always wins, resolved against cwd", () => {
-		expect(defaultGifPath({ PI_BANNER_GIF: "/tmp/demo.gif" }, BUNDLED_GIF_PATH)).toBe("/tmp/demo.gif");
-		const relative = defaultGifPath({ PI_BANNER_GIF: "art/x.gif" }, BUNDLED_GIF_PATH);
-		expect(relative).toBe(join(process.cwd(), "art/x.gif"));
+	it("refines the height from the artwork aspect ratio", () => {
+		const config = load(JSON.stringify({ image: { width: 40 } }));
+		const square = applySourceSize(config, { width: 500, height: 500 });
+		expect(square.size.height).toBe(20);
+		const wide = applySourceSize(config, { width: 1000, height: 250 });
+		expect(wide.size.height).toBe(5);
 	});
 
-	test("falls back to a home-directory copy when the bundled gif is absent", () => {
-		const resolved = defaultGifPath({ PI_CODING_AGENT_DIR: "/tmp/pi-agent-empty" }, "/nonexistent/banner.gif");
-		// Drop-in first, then the machine's original artwork; never the missing bundle.
-		expect([
-			join("/tmp/pi-agent-empty", "banner.gif"),
-			join(homedir(), "Pictures", "logo", "v-1.gif"),
-		]).toContain(resolved ?? "");
+	it("never overrides an explicit height", () => {
+		const config = load(JSON.stringify({ image: { width: 40, height: 30 } }));
+		expect(applySourceSize(config, { width: 1000, height: 250 })).toBe(config);
 	});
 });
 
-describe("formatSize / describeConfig", () => {
-	test("round-trips through parseSize", () => {
-		expect(formatSize({ width: 44, height: 22 })).toBe("44x22");
-		expect(parseSize(formatSize({ width: 12, height: 6 }))).toEqual({ width: 12, height: 6 });
+describe("config: tolerance", () => {
+	it("warns once about invalid JSON and keeps defaults", () => {
+		const config = load("{ not json");
+		expect(config.size).toEqual(DEFAULTS.size);
+		expect(config.source.warnings).toHaveLength(1);
+		expect(config.source.warnings[0]).toContain("invalid JSON");
 	});
 
-	test("describes the effective config on one line", () => {
-		const text = describeConfig(loadConfig({ PI_CODING_AGENT_DIR: "/tmp/pi-agent", PI_BANNER_SIZE: "40x20" }));
-		expect(text).toContain("size=40x20");
-		expect(text).toContain("renderer=auto");
+	it("drops only the offending fields", () => {
+		const config = load(
+			JSON.stringify({
+				image: { width: "wide", fps: 100, renderer: "sixel", height: "tall" },
+				layout: { gap: true },
+			}),
+		);
+		expect(config.size.width).toBe(DEFAULTS.size.width);
+		expect(config.fps).toBe(30); // clamped, not dropped
+		expect(config.renderer).toBe("auto");
+		expect(config.heightAuto).toBe(true);
+		expect(config.layout.gap).toBe(DEFAULTS.layout.gap);
+		expect(config.source.warnings.join("\n")).toContain("image.width");
+		expect(config.source.warnings.join("\n")).toContain("image.renderer");
+		expect(config.source.warnings.join("\n")).toContain("layout.gap");
 	});
 
-	test("max banner width is a sane constant", () => {
-		expect(BANNER_MAX_WIDTH).toBeGreaterThanOrEqual(80);
+	it("ignores unknown keys and unknown list entries", () => {
+		const config = load(
+			JSON.stringify({
+				unknownTopLevel: 42,
+				image: { nope: 1 },
+				panels: { resources: { sections: ["context", "nonsense"] } },
+			}),
+		);
+		expect(config.panels.resources.sections).toEqual(["context"]);
+		expect(config.source.warnings.join("\n")).toContain("nonsense");
+	});
+
+	it("warns but still reads a file with an unexpected version", () => {
+		const config = load(JSON.stringify({ version: 2, image: { width: 52 } }));
+		expect(config.size.width).toBe(52);
+		expect(config.source.warnings.join("\n")).toContain("version");
+	});
+
+	it("treats a non-object root as defaults", () => {
+		const settings = validateSettings([1, 2, 3]);
+		expect(settings.image.width).toBe(DEFAULTS.size.width);
+		expect(settings.warnings.join("\n")).toContain("root");
+	});
+
+	it("treats a non-object group as defaults", () => {
+		const settings = validateSettings({ image: "nope" });
+		expect(settings.image.fps).toBe(DEFAULTS.fps);
+		expect(settings.warnings.join("\n")).toContain("image: expected an object");
+	});
+
+	it("collapses duplicate list entries", () => {
+		const settings = validateSettings({ panels: { resources: { sections: ["themes", "themes", "skills"] } } });
+		expect(settings.panels.resources.sections).toEqual(["themes", "skills"]);
 	});
 });
 
-describe("kitty config knobs", () => {
-	test("parseKittyMode defaults to anim and only accepts frames", () => {
-		expect(parseKittyMode("frames")).toBe("frames");
-		expect(parseKittyMode("FRAMES")).toBe("frames");
-		expect(parseKittyMode("anim")).toBe("anim");
-		expect(parseKittyMode("ANIM")).toBe("anim");
-		expect(parseKittyMode(undefined)).toBe("anim");
-		expect(parseKittyMode("garbage")).toBe("anim");
+describe("config: helpers", () => {
+	it("parses WxH sizes", () => {
+		expect(parseSize("50x30")).toEqual({ width: 50, height: 30 });
+		expect(parseSize("50X30")).toEqual({ width: 50, height: 30 });
+		expect(parseSize(undefined, { width: 40, height: 20 })).toEqual({ width: 40, height: 20 });
+		expect(parseSize("nope", { width: 40, height: 20 })).toEqual({ width: 40, height: 20 });
+		expect(parseSize("1000x1000")).toEqual({ width: 160, height: 60 });
 	});
 
-	test("paletteOf rounds down to a supported palette size", () => {
-		expect(paletteOf(100)).toBe(64);
-		expect(paletteOf(300)).toBe(256);
-		expect(paletteOf(8)).toBe(16);
-		expect(paletteOf(128)).toBe(128);
+	it("snaps palettes down to a supported size", () => {
+		expect(paletteOf(1)).toBe(16);
+		expect(paletteOf(200)).toBe(128);
+		expect(paletteOf(256)).toBe(256);
 	});
 
-	test("reads the image env vars and clamps them", () => {
-		const config = loadConfig({
-			PI_CODING_AGENT_DIR: "/tmp/pi-agent",
-			PI_BANNER_KITTY_MODE: "frames",
-			PI_BANNER_PALETTE: "200",
-			PI_BANNER_MAX_PX: "1",
-			PI_BANNER_MAX_FRAMES: "900",
-			PI_BANNER_ANIM_SECONDS: "5",
-		});
-		expect(config.kittyMode).toBe("frames");
-		// Normalized on read, so the pipeline never sees an unsupported depth.
-		expect(config.palette).toBe(128);
-		expect(loadConfig({ PI_CODING_AGENT_DIR: "/tmp/pi-agent", PI_BANNER_PALETTE: "64" }).palette).toBe(64);
-		expect(loadConfig({ PI_CODING_AGENT_DIR: "/tmp/pi-agent", PI_BANNER_PALETTE: "8" }).palette).toBe(16);
-		expect(config.maxPixels).toBe(LIMITS.maxPixels.min);
-		expect(config.maxFrames).toBe(LIMITS.maxFrames.max);
-		expect(config.animSeconds).toBe(5);
-	});
-
-	test("describeConfig mentions the kitty knobs", () => {
-		const text = describeConfig(loadConfig({ PI_CODING_AGENT_DIR: "/tmp/pi-agent" }));
-		expect(text).toContain("kitty=anim");
-		expect(text).toContain("palette=128");
+	it("keeps the defaults self-consistent", () => {
+		expect(DEFAULTS.size.height).toBe(autoHeightFor(DEFAULTS.size.width));
+		expect(DEFAULTS.version).toBe(1);
+		expect(DEFAULTS.renderer).toBe("auto");
 	});
 });

@@ -15,14 +15,18 @@
  *   bun run scripts/preview.ts --no-frames           # placeholder card only
  *   bun run scripts/preview.ts --plain               # no colors (diffable)
  *   bun run scripts/preview.ts --static --image      # native kitty image band
+ *   bun run scripts/preview.ts --config /tmp/tweak.json --static
  *   PI_IMAGE_PROTOCOL=kitty bun run scripts/preview.ts --static --image --real-kitty
  *   PI_IMAGE_PROTOCOL=kitty bun run scripts/preview.ts --static   # --image implied
  *
  * Art goes to stdout, diagnostics to stderr, so `... > preview.txt` is safe.
  */
 
+import { readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { Banner } from "../src/banner.ts";
 import {
+	applySourceSize,
 	clamp,
 	DEFAULTS,
 	formatSize,
@@ -32,7 +36,7 @@ import {
 	type BannerConfig,
 } from "../src/config.ts";
 import { FrameError, loadFrames, missingToolsFor, preflight, type FrameSet } from "../src/frames.ts";
-import { loadImageFrames, type ImageFrameSet } from "../src/images.ts";
+import { loadImageFrames, probeSourceSize, type ImageFrameSet } from "../src/images.ts";
 import { imageBandBudget, parseKittyRows } from "../src/layout.ts";
 import { isImageLine, visibleWidth } from "../src/text.ts";
 import { collectResources, emptyResources, type BannerResources } from "../src/resources.ts";
@@ -73,6 +77,8 @@ interface Args {
 	realKitty: boolean;
 	/** Simulated PI_IMAGE_PROTOCOL value. */
 	imageProto?: string;
+	/** Explicit config file. */
+	config?: string;
 }
 
 const USAGE = `usage: bun run scripts/preview.ts [flags]
@@ -83,7 +89,8 @@ const USAGE = `usage: bun run scripts/preview.ts [flags]
   --size WxH          chafa canvas size (default ${formatSize(DEFAULTS.size)})
   --width COLS        simulated terminal width (default $COLUMNS or 100)
   --anim              loop frames in place until Ctrl-C
-  --gif PATH          gif to preview (default PI_BANNER_GIF / demo gif)
+  --gif PATH          gif to preview (default: pi-chafa-banner.json / bundled gif)
+  --config PATH       read configuration from PATH instead of <repo>/pi-chafa-banner.json
   --frame N           first animation frame
   --rows N            simulated terminal height (default $LINES or 40)
   --no-frames         skip chafa and show the placeholder/degraded card
@@ -96,6 +103,19 @@ const USAGE = `usage: bun run scripts/preview.ts [flags]
   --image-proto P     simulate PI_IMAGE_PROTOCOL=kitty|iterm2|none
   --256               render with the 256-color palette
   -h, --help          this text`;
+
+/**
+ * `--config PATH` reads that exact file; otherwise the package's own
+ * `pi-chafa-banner.json` (or built-in defaults when it does not exist).
+ */
+function loadJsonConfig(path: string | undefined): BannerConfig {
+	if (!path) return loadConfig();
+	const absolute = resolve(path);
+	return loadConfig({
+		root: dirname(absolute),
+		read: (target) => (target === join(dirname(absolute), "pi-chafa-banner.json") ? readFileSync(absolute, "utf8") : undefined),
+	});
+}
 
 function positiveInt(raw: string | undefined, fallback: number): number {
 	const value = Number(raw);
@@ -142,6 +162,9 @@ function parseArgs(argv: string[]): Args {
 			}
 			case "--size":
 				args.size = argv[++i];
+				break;
+			case "--config":
+				args.config = argv[++i];
 				break;
 			case "--gif":
 				args.gif = argv[++i];
@@ -360,11 +383,22 @@ function describeImageStructure(lines: readonly string[], images: ImageFrameSet)
 
 async function main(): Promise<void> {
 	const args = parseArgs(process.argv.slice(2));
-	const config: BannerConfig = { ...loadConfig(), enabled: true };
+	const config: BannerConfig = { ...loadJsonConfig(args.config), enabled: true };
 	if (args.gif) config.gifPath = args.gif;
-	if (args.size) config.size = parseSize(args.size, config.size);
+	if (args.size) {
+		config.size = parseSize(args.size, config.size);
+		// An explicit canvas is explicit: do not derive it from the artwork.
+		config.heightAuto = false;
+	}
 	if (args.fps !== undefined) config.fps = args.fps;
 	if (args.static) config.static = true;
+	if (config.heightAuto && config.gifPath) {
+		try {
+			Object.assign(config, applySourceSize(config, await probeSourceSize(config.gifPath)));
+		} catch {
+			// Missing ffmpeg: the width-derived height is a fine fallback.
+		}
+	}
 
 	stubTerminal.rows = args.rows;
 	stubTerminal.columns = args.width;
@@ -431,7 +465,7 @@ async function main(): Promise<void> {
 		} catch (error) {
 			const message = error instanceof FrameError ? error.message : error instanceof Error ? error.message : String(error);
 			console.error(`preview: cannot build frames — ${message}`);
-			console.error("  set PI_BANNER_GIF=/path/to.gif or drop one at ~/.pi/agent/banner.gif");
+			console.error(`  point image.path in ${config.source.path ?? "pi-chafa-banner.json"} at a readable gif`);
 			process.exit(1);
 		}
 	}

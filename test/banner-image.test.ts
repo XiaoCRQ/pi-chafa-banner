@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { Banner, type BannerInit } from "../src/banner.ts";
+import { Banner, cachedImageLineCount, clearImageLineCache, type BannerInit } from "../src/banner.ts";
 import { DEFAULTS, type BannerConfig } from "../src/config.ts";
 import type { ImageFrameSet } from "../src/images.ts";
 import { blockWidthFor, CHROME_ROWS, parseKittyRows } from "../src/layout.ts";
@@ -135,7 +135,8 @@ describe("banner: image band structure", () => {
 		const lines = banner({ images: imageSet({ rows: 22 }) }, 40).render(100);
 		expect(imageLines(lines).length).toBe(1);
 		const line = imageLines(lines)[0]!;
-		expect(parseKittyRows(line)).toBe(21);
+		// body (33) - gap (1) - the panels' preferred height (12).
+		expect(parseKittyRows(line)).toBe(20);
 		expect(line).toContain("h=");
 		expect(line).toContain("y=0");
 		expect(lines.some((text) => text.includes("IMAGE"))).toBe(false);
@@ -325,13 +326,14 @@ describe("banner: modes", () => {
 	test("pre-composes the multi-megabyte image line outside render()", () => {
 		// ~2 MB of base64 chunks; building it lazily would put a big concat on the
 		// first paint, inside `render()`. `setImages()` (and the constructor) warm it.
+		clearImageLineCache();
+		expect(cachedImageLineCount()).toBe(0);
 		const component = banner({ config: { ...baseConfig, kittyMode: "anim" } });
-		const internals = component as unknown as { animLine?: string };
-		expect(internals.animLine).toBeDefined();
+		expect(cachedImageLineCount()).toBeGreaterThan(0);
 		component.setImages(imageSet());
-		expect(internals.animLine).toBeDefined();
+		expect(cachedImageLineCount()).toBeGreaterThan(0);
 		component.setImages(undefined);
-		expect(internals.animLine).toBeUndefined();
+		expect(cachedImageLineCount()).toBe(0);
 	});
 
 	test("hidden banner renders nothing", () => {

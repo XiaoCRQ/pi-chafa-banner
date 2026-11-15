@@ -17,12 +17,17 @@
  *   -s WxH              fixed cell grid; keeps every frame identical in size
  */
 
-import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { formatSize, piAgentDir, type BannerConfig, type BannerSize } from "./config.ts";
+import { formatSize, type BannerConfig, type BannerSize } from "./config.ts";
+import { cacheFilePath, cacheRoot, deleteCacheFile, readCacheJson, writeCacheJson } from "./pipeline/cache.ts";
+import { FrameError, gifHash, missingToolsFor, preflight, run } from "./pipeline/process.ts";
 import { padVisible, truncateToWidth, visibleWidth } from "./text.ts";
+
+// Re-exported so callers keep one import for "the char pipeline".
+export { FrameError, gifHash, missingToolsFor, preflight, run } from "./pipeline/process.ts";
+export { cacheRoot } from "./pipeline/cache.ts";
+export type { PreflightResult } from "./pipeline/process.ts";
 
 export interface FrameSet {
 	frames: string[][];
@@ -36,135 +41,8 @@ export interface FrameSet {
 	builtAt: number;
 }
 
-export class FrameError extends Error {
-	constructor(
-		readonly code: "no-gif" | "missing-tool" | "ffmpeg" | "chafa" | "empty" | "image",
-		message: string,
-	) {
-		super(message);
-		this.name = "FrameError";
-	}
-}
-
 export const CACHE_VERSION = 1;
 export const MAX_GIF_FRAMES = 240;
-
-// ---------------------------------------------------------------------------
-// process helpers
-// ---------------------------------------------------------------------------
-
-interface RunResult {
-	stdout: string;
-	stderr: string;
-}
-
-const OUTPUT_LIMIT = 32 * 1024 * 1024;
-
-/**
- * Spawn without a tty (stdin ignored). A pty would let chafa/ffmpeg interact
- * with the terminal and corrupt the running TUI.
- */
-export function run(command: string, args: string[], timeoutMs = 20_000): Promise<RunResult> {
-	return new Promise((resolve, reject) => {
-		const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
-		let stdout = "";
-		let stderr = "";
-		let settled = false;
-
-		const finish = (error: Error | undefined) => {
-			if (settled) return;
-			settled = true;
-			clearTimeout(timer);
-			if (error) reject(error);
-			else resolve({ stdout, stderr });
-		};
-
-		const timer = setTimeout(() => {
-			child.kill("SIGKILL");
-			finish(new Error(`${command} timed out after ${timeoutMs}ms`));
-		}, timeoutMs);
-
-		child.stdout?.setEncoding("utf8");
-		child.stderr?.setEncoding("utf8");
-		child.stdout?.on("data", (chunk: string) => {
-			stdout += chunk;
-			if (stdout.length > OUTPUT_LIMIT) {
-				child.kill("SIGKILL");
-				finish(new Error(`${command} produced more than ${OUTPUT_LIMIT} bytes`));
-			}
-		});
-		child.stderr?.on("data", (chunk: string) => {
-			if (stderr.length < 64_000) stderr += chunk;
-		});
-		child.on("error", (error) => finish(error));
-		child.on("close", (code, signal) => {
-			if (code === 0) {
-				finish(undefined);
-				return;
-			}
-			const reason = signal ? `signal ${signal}` : `exit code ${code}`;
-			const detail = stderr.trim().split("\n").slice(-3).join(" ").trim();
-			finish(new Error(`${command} failed (${reason})${detail ? `: ${detail}` : ""}`));
-		});
-	});
-}
-
-/**
- * Split the preflight result by what a renderer actually needs: the char
- * renderer drives chafa *and* ffmpeg, the kitty renderer only needs ffmpeg (the
- * PNGs are encoded, never rasterized into cells).
- */
-export function missingToolsFor(result: PreflightResult, need: "chars" | "kitty"): string[] {
-	const required = need === "kitty" ? ["ffmpeg"] : ["chafa", "ffmpeg"];
-	return required.filter((bin) => result.missing.includes(bin));
-}
-
-export interface PreflightResult {
-	ok: boolean;
-	missing: string[];
-	versions: Record<string, string>;
-}
-
-let preflightCache: PreflightResult | undefined;
-
-/** Probe chafa/ffmpeg once per process; `/splash status` reuses the result. */
-export async function preflight(force = false): Promise<PreflightResult> {
-	if (preflightCache && !force) return preflightCache;
-	const versions: Record<string, string> = {};
-	const missing: string[] = [];
-	for (const [bin, args] of [
-		["chafa", ["--version"]],
-		["ffmpeg", ["-version"]],
-	] as const) {
-		try {
-			const { stdout, stderr } = await run(bin, [...args], 5_000);
-			// ffmpeg prints its banner on stdout, chafa on stdout too; join for safety.
-			const first = `${stdout}${stderr}`.split("\n").find((line) => line.trim().length > 0) ?? "";
-			versions[bin] = first.trim();
-		} catch {
-			missing.push(bin);
-		}
-	}
-	preflightCache = { ok: missing.length === 0, missing, versions };
-	return preflightCache;
-}
-
-// ---------------------------------------------------------------------------
-// cache
-// ---------------------------------------------------------------------------
-
-/** sha1(path + mtime + size): a cheap "is this the same gif" fingerprint. */
-export async function gifHash(gifPath: string): Promise<string> {
-	let info: Awaited<ReturnType<typeof stat>>;
-	try {
-		info = await stat(gifPath);
-	} catch (error) {
-		// Callers only care about "no usable gif", not about ENOENT vs EACCES.
-		throw new FrameError("no-gif", `cannot read ${gifPath}: ${(error as NodeJS.ErrnoException).code ?? "error"}`);
-	}
-	if (!info.isFile()) throw new FrameError("no-gif", `not a file: ${gifPath}`);
-	return createHash("sha1").update(`${gifPath}\0${info.mtimeMs}\0${info.size}`).digest("hex");
-}
 
 export function normalizeColorMode(mode: string): "truecolor" | "256color" | "ansi" | "none" {
 	if (mode === "truecolor" || mode === "256color" || mode === "ansi") return mode;
@@ -184,22 +62,16 @@ export function chafaColorArgs(mode: string): string[] {
 	}
 }
 
-export function cacheRoot(): string {
-	return join(piAgentDir(), "tmp", "pi-chafa-banner");
-}
-
 export async function frameCachePath(gifPath: string, size: BannerSize, colorMode: string): Promise<string> {
 	const hash = await gifHash(gifPath);
-	return join(cacheRoot(), hash, `frames-${formatSize(size)}-${normalizeColorMode(colorMode)}.json`);
+	return cacheFilePath(hash, `frames-${formatSize(size)}-${normalizeColorMode(colorMode)}.json`);
 }
 
-/** Delete exactly one cache file (never a directory tree). */
+/** Delete exactly this gif's char-frame cache (never a directory tree). */
 export async function clearCache(config: BannerConfig, colorMode: string): Promise<boolean> {
 	if (!config.gifPath) return false;
 	try {
-		const path = await frameCachePath(config.gifPath, config.size, colorMode);
-		await rm(path, { force: true });
-		return true;
+		return await deleteCacheFile(await frameCachePath(config.gifPath, config.size, colorMode));
 	} catch {
 		return false;
 	}
@@ -236,16 +108,11 @@ async function readCache(
 	size: BannerSize,
 	colorMode: string,
 ): Promise<CachePayload | undefined> {
-	try {
-		const raw = await readFile(path, "utf8");
-		const parsed: unknown = JSON.parse(raw);
-		if (!isFrameSetLike(parsed)) return undefined;
-		if (parsed.width !== size.width || parsed.height !== size.height) return undefined;
-		if (normalizeColorMode(parsed.colorMode) !== normalizeColorMode(colorMode)) return undefined;
-		return parsed;
-	} catch {
-		return undefined;
-	}
+	const parsed = await readCacheJson(path);
+	if (!isFrameSetLike(parsed)) return undefined;
+	if (parsed.width !== size.width || parsed.height !== size.height) return undefined;
+	if (normalizeColorMode(parsed.colorMode) !== normalizeColorMode(colorMode)) return undefined;
+	return parsed;
 }
 
 // ---------------------------------------------------------------------------
@@ -408,7 +275,7 @@ export async function loadFrames(
 			builtAt,
 			frames,
 		};
-		await writeCache(cachePath, payload);
+		await writeCacheJson(cachePath, payload);
 
 		return {
 			frames,
@@ -424,16 +291,5 @@ export async function loadFrames(
 	} finally {
 		// Explicit path from mkdtemp; never a wildcard.
 		await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
-	}
-}
-
-async function writeCache(path: string, payload: CachePayload): Promise<void> {
-	try {
-		await mkdir(dirname(path), { recursive: true });
-		const tmpFile = `${path}.${process.pid}.tmp`;
-		await writeFile(tmpFile, JSON.stringify(payload), "utf8");
-		await rename(tmpFile, path);
-	} catch {
-		// Cache is best-effort: a read-only ~/.pi must not break the splash.
 	}
 }

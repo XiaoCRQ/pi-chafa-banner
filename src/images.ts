@@ -11,18 +11,12 @@
  * processes sharing a cache directory cannot collide in the terminal.
  */
 
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { paletteOf, type BannerConfig } from "./config.ts";
-import {
-	FrameError,
-	cacheRoot,
-	extractFrames,
-	gifHash,
-	missingToolsFor,
-	preflight,
-	run,
-} from "./frames.ts";
+import { cacheFilePath, cacheRoot, deleteCacheFile, readCacheJson, writeCacheJson } from "./pipeline/cache.ts";
+import { FrameError, gifHash, missingToolsFor, preflight, run } from "./pipeline/process.ts";
+import { extractFrames } from "./frames.ts";
 import {
 	allocateImageId,
 	calculateImageCells,
@@ -119,8 +113,10 @@ export function imageCachePath(
 	palette: number,
 	stride: number,
 ): string {
-	const name = `images-b${budget.maxColumns}x${budget.maxRows}-c${cell.widthPx}x${cell.heightPx}-p${palette}-s${stride}.json`;
-	return join(cacheRoot(), gifSha1, name);
+	return cacheFilePath(
+		gifSha1,
+		`images-b${budget.maxColumns}x${budget.maxRows}-c${cell.widthPx}x${cell.heightPx}-p${palette}-s${stride}.json`,
+	);
 }
 
 /** Delete exactly one image cache file (never a directory tree). */
@@ -133,10 +129,7 @@ export async function clearImageCache(config: BannerConfig, options: ImageLoadOp
 			maxColumns: options.maxColumns ?? config.size.width,
 			maxRows: options.maxRows ?? config.size.height,
 		};
-		await rm(imageCachePath(hash, budget, cell, paletteOf(config.palette), Math.max(1, config.stride)), {
-			force: true,
-		});
-		return true;
+		return await deleteCacheFile(imageCachePath(hash, budget, cell, paletteOf(config.palette), Math.max(1, config.stride)));
 	} catch {
 		return false;
 	}
@@ -171,6 +164,21 @@ export async function probeGifSize(gifPath: string, workDir: string, timeoutMs =
 		throw new FrameError("image", `could not read PNG dimensions from ${gifPath}`);
 	}
 	return { widthPx: size.width, heightPx: size.height };
+}
+
+/**
+ * Aspect ratio of the artwork, for `height: "auto"`.
+ *
+ * Deliberately renderer-agnostic: chafa's canvas and the native cell grid must
+ * agree on the band height, otherwise the two modes produce visibly different
+ * splashes. Cheap (one ffmpeg run, no quantization) and only used when the
+ * config asks for an automatic height.
+ */
+export async function probeSourceSize(gifPath: string, timeoutMs = MAX_IMAGE_TIMEOUT_MS): Promise<{ width: number; height: number }> {
+	const dir = join(cacheRoot(), "probe");
+	await mkdir(dir, { recursive: true });
+	const size = await probeGifSize(gifPath, dir, timeoutMs);
+	return { width: size.widthPx, height: size.heightPx };
 }
 
 /**
@@ -292,23 +300,12 @@ function isImageCachePayload(value: unknown): value is ImageCachePayload {
 }
 
 async function readImageCache(path: string): Promise<ImageCachePayload | undefined> {
-	try {
-		const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
-		return isImageCachePayload(parsed) ? parsed : undefined;
-	} catch {
-		return undefined;
-	}
+	const parsed = await readCacheJson(path);
+	return isImageCachePayload(parsed) ? parsed : undefined;
 }
 
 async function writeImageCache(path: string, payload: ImageCachePayload): Promise<void> {
-	try {
-		await mkdir(dirname(path), { recursive: true });
-		const tmpFile = `${path}.${process.pid}.tmp`;
-		await writeFile(tmpFile, JSON.stringify(payload), "utf8");
-		await rename(tmpFile, path);
-	} catch {
-		// Best effort: a read-only ~/.pi must not break the splash.
-	}
+	await writeCacheJson(path, payload);
 }
 
 // ---------------------------------------------------------------------------
