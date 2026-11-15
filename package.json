@@ -17,6 +17,7 @@
 		"src",
 		"assets",
 		"docs",
+		"scripts",
 		"README.md",
 		"README.zh-CN.md",
 		"LICENSE",
@@ -33,7 +34,8 @@
 		"preview:static": "bun run scripts/preview.ts --static",
 		"test": "bun test",
 		"typecheck": "tsc --noEmit",
-		"demo": "bash scripts/demo.sh"
+		"demo": "bash scripts/demo.sh",
+		"prepublishOnly": "bunx tsc --noEmit && bun test"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*",
@@ -58,5 +60,12 @@
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/XiaoCRQ/pi-chafa-banner.git"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"homepage": "https://github.com/XiaoCRQ/pi-chafa-banner#readme",
+	"bugs": {
+		"url": "https://github.com/XiaoCRQ/pi-chafa-banner/issues"
 	}
 }
