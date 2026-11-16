@@ -154,7 +154,14 @@ describe("extension registration", () => {
 
 describe("session lifecycle", () => {
 	test("installs a header that degrades to a diagnostic for a bad gif", async () => {
-		setConfigLoader(() => ({ ...DEFAULTS, gifPath: "/nonexistent/x.gif" }));
+		// `plans[*].image` is the authority now: the default tree's chafa node has no
+		// explicit `img`, so `image.path` seeds it at parse time.
+		const badGif = "/nonexistent/x.gif";
+		setConfigLoader(() => ({
+			...DEFAULTS,
+			gifPath: badGif,
+			plans: DEFAULTS.plans.map((plan) => ({ ...plan, image: badGif })),
+		}));
 		const host = makeHost();
 		piChafaBanner(host.pi);
 		await host.fire("session_start", { type: "session_start", reason: "startup" });

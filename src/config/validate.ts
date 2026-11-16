@@ -1,27 +1,28 @@
 /**
- * Defensive parsing of `pi-chafa-banner.json`.
+ * Defensive parsing of `pi-chafa-banner.json` (v2).
  *
  * Policy (see AGENTS.md): a missing file, a missing key or a typo must never
  * break the splash — the field is dropped, the default is used, and the reason
  * is reported once through `warnings`. Unknown keys are ignored silently so a
  * newer config can be shared with an older checkout.
+ *
+ * One exception, on purpose: a structurally broken `layout` tree is *not*
+ * replaced by the default tree. The error is returned as `layoutError` so the
+ * renderer can show a `LAYOUT ERROR` card — silently drawing a different splash
+ * is exactly what the layout rewrite is meant to stop.
  */
 
 import { MAX_CHAFA_ARGS_LENGTH } from "../pipeline/args.ts";
+import type { LayoutNode, SplashGap, SplashSettings } from "../layout/tree.ts";
+import { translateLegacyConfig } from "./legacy.ts";
+import { hasLayoutTree, parseLayoutTree } from "./tree.ts";
 import {
 	DEFAULT_FILE,
 	LIMITS,
-	PANEL_FIELDS,
-	RESOURCE_SECTIONS,
 	THEME_PRESETS,
 	clamp,
 	parseHexColor,
-	type AutoSize,
 	type ImageSettings,
-	type LayoutSettings,
-	type PanelField,
-	type PanelsSettings,
-	type ResourceSectionId,
 	type ThemePreset,
 	type ThemeSettings,
 } from "./schema.ts";
@@ -30,8 +31,11 @@ type Json = Record<string, unknown>;
 
 export interface ValidatedSettings {
 	image: ImageSettings;
-	layout: LayoutSettings;
-	panels: PanelsSettings;
+	/** Root box semantics: `width`/`height`/`gap` + the variable-size flags. */
+	splash: SplashSettings;
+	/** Parsed tree; undefined exactly when `layoutError` is set. */
+	layoutTree: LayoutNode | undefined;
+	layoutError: string | undefined;
 	theme: ThemeSettings;
 	enabled: boolean;
 	static: boolean;
@@ -52,8 +56,8 @@ const show = (value: unknown): string => {
 const DEFAULTS = DEFAULT_FILE;
 
 /**
- * Tracks the JSON path so warnings read `panels.resources.width: …` instead of
- * a bare key, and shares one warning sink across the whole document.
+ * Tracks the JSON path so warnings read `image.chafa: …` instead of a bare key,
+ * and shares one warning sink across the whole document.
  */
 class Reader {
 	constructor(
@@ -90,7 +94,8 @@ class Reader {
 		return clamped;
 	}
 
-	autoSize(key: string, range: { min: number; max: number }, fallback: AutoSize): AutoSize {
+	/** `"auto"` or a number clamped to `range`; anything else falls back. */
+	rate(key: string, range: { min: number; max: number }, fallback: number | "auto"): number | "auto" {
 		const raw = this.raw[key];
 		if (raw === undefined) return fallback;
 		if (raw === "auto") return "auto";
@@ -103,11 +108,33 @@ class Reader {
 		return clamped;
 	}
 
-	/** `"auto"` or a number clamped to `range`; anything else falls back. */
-	rate(key: string, range: { min: number; max: number }, fallback: number | "auto"): number | "auto" {
+	/**
+	 * Gap per axis: a number (both axes), or `{ width, height }`. Each axis is
+	 * clamped on its own; a malformed axis keeps its fallback and warns.
+	 */
+	gap(key: string, range: { min: number; max: number }, fallback: SplashGap): SplashGap {
 		const raw = this.raw[key];
 		if (raw === undefined) return fallback;
-		if (raw === "auto") return "auto";
+		if (typeof raw === "number") {
+			const both = this.number(key, range, fallback.width);
+			return { width: both, height: both };
+		}
+		if (!isObject(raw)) {
+			this.warn(key, `expected a number or { width, height }, got ${show(raw)}`);
+			return fallback;
+		}
+		const nested = new Reader(raw, this.path ? `${this.path}.${key}` : key, this.warnings);
+		return {
+			width: nested.number("width", range, fallback.width),
+			height: nested.number("height", range, fallback.height),
+		};
+	}
+
+	/** `"auto"` (content-driven) or a number clamped to `range`; anything else falls back. */
+	height(key: string, range: { min: number; max: number }, fallback: number | null): number | null {
+		const raw = this.raw[key];
+		if (raw === undefined) return fallback;
+		if (raw === "auto") return null;
 		if (typeof raw !== "number" || !Number.isFinite(raw)) {
 			this.warn(key, `expected "auto" or a number between ${range.min} and ${range.max}, got ${show(raw)}`);
 			return fallback;
@@ -135,25 +162,6 @@ class Reader {
 			return fallback;
 		}
 		return raw as T;
-	}
-
-	/** String array filtered to `allowed`; duplicates collapse, order is kept. */
-	list<T extends string>(key: string, allowed: readonly T[], fallback: readonly T[]): T[] {
-		const raw = this.raw[key];
-		if (raw === undefined) return [...fallback];
-		if (!Array.isArray(raw)) {
-			this.warn(key, `expected an array of ${allowed.join(", ")}, got ${show(raw)}`);
-			return [...fallback];
-		}
-		const kept: T[] = [];
-		for (const entry of raw) {
-			if (typeof entry !== "string" || !allowed.includes(entry as T)) {
-				this.warn(key, `ignored unknown entry ${show(entry)}`);
-				continue;
-			}
-			if (!kept.includes(entry as T)) kept.push(entry as T);
-		}
-		return kept;
 	}
 
 	/** Free-form string (chafa arguments); a wrong type falls back to `fallback`. */
@@ -207,7 +215,8 @@ class Reader {
  * Turn whatever `JSON.parse` produced into usable settings.
  *
  * Never throws: every problem lands in `warnings` and falls back to the default
- * for that single field.
+ * for that single field — except a structural layout error, which is reported
+ * through `layoutError` with `layoutTree` left undefined.
  */
 export function validateSettings(raw: unknown): ValidatedSettings {
 	const warnings: string[] = [];
@@ -216,23 +225,62 @@ export function validateSettings(raw: unknown): ValidatedSettings {
 	}
 	const file = new Reader(isObject(raw) ? raw : {}, "", warnings);
 
-	const version = file.raw.version;
-	if (version !== undefined && version !== DEFAULTS.version) {
-		file.warn("version", `expected ${DEFAULTS.version}, got ${show(version)} (reading anyway)`);
-	}
-
 	const image = file.child("image");
-	const layout = file.child("layout");
-	const panels = file.child("panels");
-	const info = panels.child("info");
-	const resources = panels.child("resources");
 	const theme = file.child("theme");
 	const behavior = file.child("behavior");
 
 	const imageDefaults = DEFAULTS.image;
-	const layoutDefaults = DEFAULTS.layout;
-	const panelDefaults = DEFAULTS.panels;
 	const behaviorDefaults = DEFAULTS.behavior;
+
+	// v2 detection is structural: `layout.type` or `layout.children` means a tree.
+	// A v1 flat group is translated; anything else (null, array, string) is a
+	// structural error the parser reports.
+	const rawLayout = file.raw.layout;
+	const version = file.raw.version;
+	let layoutTree: LayoutNode | undefined;
+	let layoutError: string | undefined;
+	let legacyWidth: number | undefined;
+	let legacyGap: number | undefined;
+	let legacyCompactWidth: number | undefined;
+
+	// One version check for every shape of file: a tree, a v1 flat group or a
+	// bare `{width, height}` document. It never changes what is read, and a v1
+	// flat group is a supported shape rather than a mismatch.
+	const treeShape = rawLayout !== undefined && isObject(rawLayout) && hasLayoutTree(rawLayout);
+	if (version !== undefined) {
+		if (version !== 1 && version !== DEFAULTS.version) {
+			const expected = treeShape ? `${DEFAULTS.version}` : `1 or ${DEFAULTS.version}`;
+			file.warn("version", `expected ${expected}, got ${show(version)} (reading anyway)`);
+		} else if (treeShape && version !== DEFAULTS.version) {
+			file.warn("version", `expected ${DEFAULTS.version}, got ${show(version)} (reading anyway)`);
+		}
+	}
+
+	if (rawLayout !== undefined && (!isObject(rawLayout) || hasLayoutTree(rawLayout))) {
+		const parsed = parseLayoutTree(rawLayout, "layout");
+		layoutTree = parsed.tree;
+		layoutError = parsed.error;
+		warnings.push(...parsed.warnings);
+		// The renderer shows the card; `warnings` is what `/splash status` and a
+		// failed `/splash reload` print, so the reason has to travel with them.
+		if (layoutError !== undefined) warnings.push(`layout: ${layoutError}`);
+	} else {
+		const legacy = translateLegacyConfig(file.raw);
+		warnings.push(...legacy.warnings);
+		layoutTree = legacy.tree;
+		legacyWidth = legacy.width;
+		legacyGap = legacy.gap;
+		legacyCompactWidth = legacy.compactWidth;
+	}
+
+	const splash: SplashSettings = {
+		width: file.number("width", LIMITS.width, legacyWidth ?? DEFAULTS.width),
+		height: file.height("height", LIMITS.height, DEFAULTS.height),
+		gap: file.gap("gap", LIMITS.gap, legacyGap === undefined ? DEFAULTS.gap : { width: legacyGap, height: 0 }),
+		variableWidth: file.bool("variableWidth", DEFAULTS.variableWidth),
+		variableHeight: file.bool("variableHeight", DEFAULTS.variableHeight),
+		compactWidth: file.number("compactWidth", LIMITS.compactWidth, legacyCompactWidth ?? DEFAULTS.compactWidth),
+	};
 
 	return {
 		image: {
@@ -241,35 +289,9 @@ export function validateSettings(raw: unknown): ValidatedSettings {
 			stride: image.number("stride", LIMITS.stride, imageDefaults.stride),
 			chafa: image.string("chafa", imageDefaults.chafa),
 		},
-		layout: {
-			width: layout.number("width", LIMITS.layoutWidth, layoutDefaults.width),
-			gap: layout.number("gap", LIMITS.gap, layoutDefaults.gap),
-			twoColumnMinWidth: layout.number("twoColumnMinWidth", LIMITS.layoutWidth, layoutDefaults.twoColumnMinWidth),
-			compactMinWidth: layout.number("compactMinWidth", LIMITS.layoutWidth, layoutDefaults.compactMinWidth),
-			maxWidth: layout.number("maxWidth", LIMITS.layoutWidth, layoutDefaults.maxWidth),
-			lowerRows: layout.number("lowerRows", LIMITS.lowerRows, layoutDefaults.lowerRows),
-		},
-		panels: {
-			info: {
-				enabled: info.bool("enabled", panelDefaults.info.enabled),
-				fields: info.list("fields", PANEL_FIELDS, [...panelDefaults.info.fields] as PanelField[]),
-			},
-			resources: {
-				enabled: resources.bool("enabled", panelDefaults.resources.enabled),
-				sections: resources.list(
-					"sections",
-					RESOURCE_SECTIONS,
-					[...panelDefaults.resources.sections] as ResourceSectionId[],
-				),
-				width: resources.autoSize("width", LIMITS.panelWidth, "auto"),
-				height: resources.autoSize("height", LIMITS.height, "auto"),
-				maxLinesPerSection: resources.number(
-					"maxLinesPerSection",
-					LIMITS.maxLinesPerSection,
-					panelDefaults.resources.maxLinesPerSection,
-				),
-			},
-		},
+		splash,
+		layoutTree,
+		layoutError,
 		theme: {
 			preset: theme.oneOf("preset", THEME_PRESETS, DEFAULTS.theme.preset as ThemePreset),
 			windowTitle: theme.color("windowTitle"),

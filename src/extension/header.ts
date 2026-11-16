@@ -26,6 +26,9 @@ export function installHeader(ctx: ExtensionContext, current: SessionState): voi
 		});
 		current.banner = banner;
 		current.installed = true;
+		// The terminal may be narrower than the configured box: hand the width back
+		// so the session can re-solve the canvases off the render path.
+		banner.onWidthChange = (width) => current.onWidthRequest?.(width);
 		banner.start();
 
 		const component = {

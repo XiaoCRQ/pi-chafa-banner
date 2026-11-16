@@ -21,9 +21,11 @@
  * must own — see `pipeline/args.ts`.
  */
 
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { formatSize, type BannerConfig, type BannerSize } from "./config.ts";
+import type { ChafaPlan } from "./layout/tree.ts";
 import { argsDigest } from "./pipeline/args.ts";
 import { cacheFilePath, cacheRoot, deleteCacheFile, readCacheJson, writeCacheJson } from "./pipeline/cache.ts";
 import { FrameError, gifHash, preflight, run } from "./pipeline/process.ts";
@@ -198,14 +200,49 @@ export interface LoadFramesOptions {
 	timeoutMs?: number;
 }
 
+/** One canvas worth of frames: everything the pipeline needs, no config object. */
+export interface FrameSource {
+	gifPath: string;
+	size: BannerSize;
+	chafaArgs?: readonly string[];
+	stride?: number;
+}
+
+/**
+ * Load the frames of a single canvas (`config.size`, the pre-tree API).
+ * Prefer `loadPlanFrames()` in code that already works with layout plans.
+ */
 export async function loadFrames(
 	config: BannerConfig,
 	colorMode: string,
 	options: LoadFramesOptions = {},
 ): Promise<FrameSet> {
-	const gifPath = config.gifPath;
+	return loadFrameSet(
+		{
+			gifPath: config.gifPath ?? "",
+			size: config.size,
+			chafaArgs: config.chafaArgs,
+			stride: config.stride,
+		},
+		colorMode,
+		options,
+	);
+}
+
+/** Build (or read from cache) the frames of one canvas described by `source`. */
+export async function loadFrameSet(
+	source: FrameSource,
+	colorMode: string,
+	options: LoadFramesOptions = {},
+): Promise<FrameSet> {
+	const gifPath = source.gifPath;
 	if (!gifPath) {
 		throw new FrameError("no-gif", "no image configured (set image.path in pi-chafa-banner.json)");
+	}
+	// Fail before spawning ffmpeg/chafa for a path that cannot be read: a missing
+	// artwork is the common case and the notice should appear immediately.
+	if (!existsSync(gifPath)) {
+		throw new FrameError("no-gif", `cannot read ${gifPath}`);
 	}
 
 	const tools = await preflight();
@@ -213,8 +250,9 @@ export async function loadFrames(
 		throw new FrameError("missing-tool", `missing ${tools.missing.join(", ")} on PATH`);
 	}
 
-	const size = config.size;
-	const chafaArgs = config.chafaArgs;
+	const size = source.size;
+	const chafaArgs = source.chafaArgs ?? [];
+	const stride = Math.max(1, source.stride ?? 1);
 	const cachePath = await frameCachePath(gifPath, size, colorMode, chafaArgs);
 
 	if (!options.force) {
@@ -254,7 +292,6 @@ export async function loadFrames(
 			throw new FrameError("ffmpeg", `no frames extracted from ${gifPath}`);
 		}
 
-		const stride = Math.max(1, config.stride);
 		// Timing first: every sampled frame inherits the delays of the frames it
 		// replaced, so one loop keeps the gif's real length at any stride.
 		const timing = await probeGifTiming(gifPath);
@@ -312,7 +349,7 @@ export async function loadFrames(
 			totalFrames: files.length,
 			stride,
 			delays,
-			chafa: chafaArgs,
+			chafa: [...chafaArgs],
 			builtAt,
 			frames,
 		};
@@ -334,4 +371,116 @@ export async function loadFrames(
 		// Explicit path from mkdtemp; never a wildcard.
 		await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
 	}
+}
+
+// ---------------------------------------------------------------------------
+// multi-canvas builds
+// ---------------------------------------------------------------------------
+
+/**
+ * Canvases a single splash may build. Every canvas is one ffmpeg + N chafa run,
+ * so the cap keeps a pathological config from blocking startup for minutes.
+ */
+export const MAX_CANVASES = 4;
+
+export interface FramePlanGroup {
+	/** First node that uses this canvas; carries timing/cache metadata. */
+	primary: ChafaPlan;
+	/** Every node path that shares the canvas (identical image/args/size). */
+	plans: ChafaPlan[];
+}
+
+function planIdentity(plan: ChafaPlan): string {
+	return [plan.image, `${plan.width}x${plan.height}`, plan.args.join(" ")].join("\u0000");
+}
+
+/**
+ * Collapse plans that describe the same canvas into one build. Two `chafa` nodes
+ * with the same image, args and allocated size would otherwise render the exact
+ * same frames twice.
+ */
+export function groupPlans(plans: readonly ChafaPlan[], limit = MAX_CANVASES): FramePlanGroup[] {
+	const groups = new Map<string, FramePlanGroup>();
+	for (const plan of plans) {
+		const id = planIdentity(plan);
+		const existing = groups.get(id);
+		if (existing) {
+			existing.plans.push(plan);
+			continue;
+		}
+		if (groups.size >= limit) continue;
+		groups.set(id, { primary: plan, plans: [plan] });
+	}
+	return [...groups.values()];
+}
+
+export interface FrameBundle {
+	/** Frames per `ChafaPlan.key`; a missing key means "placeholder". */
+	frames: Map<string, FrameSet>;
+	/** One line per canvas that failed, for the status line / placeholder card. */
+	errors: string[];
+	/** The first canvas that produced frames (drives the animation timer). */
+	primary?: FrameSet;
+}
+
+/**
+ * Build every canvas of a splash. One failing canvas only costs its own node: the
+ * rest still render, and the failure ends up in `errors` (shown by the
+ * placeholder card and `/splash status`).
+ */
+export async function loadPlanFrames(
+	config: BannerConfig,
+	colorMode: string,
+	options: LoadFramesOptions = {},
+): Promise<FrameBundle> {
+	const frames = new Map<string, FrameSet>();
+	const errors: string[] = [];
+	const plans = config.plans;
+	if (plans.length === 0) return { frames, errors };
+
+	// No up-front `preflight()` here: `loadFrameSet` checks the image first, so a
+	// missing artwork fails in a tick instead of waiting for two tool probes.
+	// The probe result is cached, so the first canvas that really builds pays for it.
+	const groups = groupPlans(plans);
+	let primary: FrameSet | undefined;
+	for (const group of groups) {
+		const { primary: plan } = group;
+		try {
+			const set = await loadFrameSet(
+				{ gifPath: plan.image, size: { width: plan.width, height: plan.height }, chafaArgs: plan.args, stride: config.stride },
+				colorMode,
+				options,
+			);
+			for (const node of group.plans) frames.set(node.key, set);
+			primary ??= set;
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			errors.push(`${plan.path}: ${message}`);
+		}
+	}
+	return { frames, errors, ...(primary ? { primary } : {}) };
+}
+
+/**
+ * Drop the cache file of every configured canvas. Used by `/splash reload` when
+ * the canvas shape changed; never touches anything but these exact files.
+ */
+export async function clearPlanCaches(config: BannerConfig, colorMode: string): Promise<number> {
+	let deleted = 0;
+	for (const group of groupPlans(config.plans)) {
+		const plan = group.primary;
+		if (!plan.image) continue;
+		try {
+			const path = await frameCachePath(
+				plan.image,
+				{ width: plan.width, height: plan.height },
+				colorMode,
+				plan.args,
+			);
+			if (await deleteCacheFile(path)) deleted += 1;
+		} catch {
+			// Unreadable gif / no cache: nothing to delete.
+		}
+	}
+	return deleted;
 }

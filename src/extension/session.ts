@@ -7,9 +7,8 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Banner } from "../banner.ts";
-import { applySourceSize, loadSessionConfig, type BannerConfig } from "../config.ts";
-import { loadFrames } from "../frames.ts";
+import { loadPlanFrames, type FrameBundle } from "../frames.ts";
+import { applyPlanSources, applyPlanWidth, loadSessionConfig, type BannerConfig } from "../config.ts";
 import { probeSourceSize } from "../pipeline/process.ts";
 import { collectResources, emptyResources, type BannerResources } from "../resources.ts";
 import { installHeader } from "./header.ts";
@@ -18,30 +17,51 @@ import { createState, errorText, session, type SessionState } from "./state.ts";
 /** pi's own API handle, for the synchronous `getCommands()`/`getSettings()` probes. */
 let cachedPi: ExtensionAPI | undefined;
 
-export async function buildContent(ctx: ExtensionContext, current: SessionState, force = false): Promise<void> {
+/**
+ * Give every planned canvas its real height: a canvas width comes from the
+ * config and the weights, the height follows the artwork's aspect ratio. Each
+ * image is probed once, so two nodes sharing a gif pay for a single ffprobe.
+ */
+async function withSourceAspects(config: BannerConfig): Promise<BannerConfig> {
+	const images = new Set(config.plans.map((plan) => plan.image).filter(Boolean));
+	if (images.size === 0) return config;
+	const sources = new Map<string, { width: number; height: number }>();
+	for (const image of images) {
+		try {
+			sources.set(image, await probeSourceSize(image));
+		} catch {
+			// Keep the width-derived guess; the build reports real failures.
+		}
+	}
+	return applyPlanSources(config, sources);
+}
+
+export async function buildContent(
+	ctx: ExtensionContext,
+	current: SessionState,
+	force = false,
+	next?: BannerConfig,
+): Promise<void> {
 	if (current.building) return;
 	current.building = true;
 	try {
-		// The canvas width is derived (half of `layout.width`); its height follows
-		// the artwork's aspect ratio, so probe the gif before rendering.
-		if (current.config.gifPath) {
-			try {
-				const source = await probeSourceSize(current.config.gifPath);
-				const applied = applySourceSize(current.config, source);
-				if (applied !== current.config) {
-					current.config = applied;
-					current.banner?.setConfig(applied);
-				}
-			} catch {
-				// Keep the rough guess; the build below reports real failures.
-			}
-		}
+		const config = await withSourceAspects(next ?? current.config);
 		const colorMode = current.theme?.getColorMode() ?? "truecolor";
-		const frames = await loadFrames(current.config, colorMode, { force });
-		current.frames = frames;
-		current.status = undefined;
-		current.banner?.setStatus(undefined);
-		current.banner?.setFrames(frames);
+		const bundle: FrameBundle = await loadPlanFrames(config, colorMode, { force });
+		// Swap the box and its canvases together: a width change re-keys every
+		// frame, so a half-applied config would show placeholders.
+		current.config = config;
+		current.frames = bundle.frames;
+		// A partially failed build still shows the working canvases; the failures
+		// land in the status line so the placeholder cards explain themselves.
+		current.status = bundle.errors.length > 0 ? bundle.errors.join("; ") : undefined;
+		current.banner?.setConfig(config);
+		current.banner?.setStatus(current.status);
+		current.banner?.setFrames(bundle.frames);
+		if (bundle.frames.size === 0 && bundle.errors.length > 0 && !current.notified) {
+			current.notified = true;
+			ctx.ui.notify(`pi-chafa-banner: ${current.status}`, "warning");
+		}
 	} catch (error) {
 		// A failed build shows the placeholder card rather than an empty header.
 		current.frames = undefined;
@@ -103,6 +123,7 @@ export async function bootstrap(pi: ExtensionAPI, ctx: ExtensionContext): Promis
 	}
 
 	installHeader(ctx, current);
+	current.onWidthRequest = (width) => resizeSplash(ctx, current, width);
 	void buildContent(ctx, current);
 	return current;
 }
@@ -142,4 +163,39 @@ export async function refreshResources(ctx: ExtensionContext, current: SessionSt
 export function scheduleRebuild(ctx: ExtensionContext, current: SessionState): void {
 	if (current.building) return;
 	void buildContent(ctx, current, true);
+}
+
+/** How long the terminal gets to settle before canvases are rebuilt. */
+const RESIZE_DEBOUNCE_MS = 250;
+
+/**
+ * The terminal is narrower than the configured box, so re-solve the canvases at
+ * the width it can actually show (frames cache per `width x height` grid, so
+ * widening back is a cache hit). Debounced: dragging a window resizes in bursts,
+ * and each rebuild is one ffmpeg/chafa run per canvas.
+ */
+export function resizeSplash(ctx: ExtensionContext, current: SessionState, width: number): void {
+	if (!current.config.enabled) return;
+	current.pendingWidth = width;
+	if (current.resizeTimer !== undefined) clearTimeout(current.resizeTimer);
+	const timer = setTimeout(() => {
+		current.resizeTimer = undefined;
+		applyPendingWidth(ctx, current);
+	}, RESIZE_DEBOUNCE_MS);
+	timer.unref?.();
+	current.resizeTimer = timer;
+}
+
+function applyPendingWidth(ctx: ExtensionContext, current: SessionState): void {
+	const target = current.pendingWidth;
+	if (target === undefined) return;
+	// A build in flight already owns the frame map; retry once it is done.
+	if (current.building) {
+		resizeSplash(ctx, current, target);
+		return;
+	}
+	current.pendingWidth = undefined;
+	const next = applyPlanWidth(current.config, target);
+	if (next === current.config) return;
+	void buildContent(ctx, current, false, next);
 }

@@ -7,10 +7,15 @@
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { describeConfig, describeConfigSource, formatSize, loadSessionConfig, type BannerConfig } from "../config.ts";
-import { clearCache, preflight } from "../frames.ts";
+import { clearPlanCaches, preflight } from "../frames.ts";
 import { describeListing, installHeader, restoreResourceListing } from "./header.ts";
 import { bootstrap, buildContent } from "./session.ts";
-import { contentSummary, session } from "./state.ts";
+import { contentSummary, framesSummary, session } from "./state.ts";
+
+/** Stable identity of every planned canvas, for cache invalidation on reload. */
+function canvasShape(config: BannerConfig): string {
+	return JSON.stringify(config.plans.map((plan) => [plan.image, plan.width, plan.height, plan.args]));
+}
 
 export const USAGE = "usage: /splash on | off | freeze | rebuild | reload | status";
 
@@ -44,7 +49,7 @@ export async function handleSplashCommand(pi: ExtensionAPI, ctx: ExtensionComman
 			current.lastDetachAt = 0;
 			if (!current.installed) installHeader(ctx, current);
 			current.banner?.setVisible(true);
-			if (!current.frames) void buildContent(ctx, current);
+			if (!current.frames || current.frames.size === 0) void buildContent(ctx, current);
 			ctx.ui.notify("pi-chafa-banner: on", "info");
 			return;
 		}
@@ -89,8 +94,10 @@ export async function handleSplashCommand(pi: ExtensionAPI, ctx: ExtensionComman
 			const previous = current.config;
 			const next = loadSessionConfig();
 			current.config = next;
-			if (next.size.width !== previous.size.width || next.size.height !== previous.size.height) {
-				await clearCache(previous, current.theme?.getColorMode() ?? "truecolor");
+			// A different canvas shape means a stale cache; drop exactly those files
+			// (the rebuild below writes fresh ones).
+			if (canvasShape(previous) !== canvasShape(next)) {
+				await clearPlanCaches(previous, current.theme?.getColorMode() ?? "truecolor");
 			}
 			current.frames = undefined;
 			current.banner?.setConfig(next);
@@ -99,7 +106,7 @@ export async function handleSplashCommand(pi: ExtensionAPI, ctx: ExtensionComman
 			const summary = contentSummary(current);
 			const warnings = next.source.warnings;
 			const lines = [
-				`pi-chafa-banner: ${summary ? `reloaded ${summary}` : `reload failed: ${current.status ?? "unknown error"}`}`,
+				`pi-chafa-banner: ${summary ? `reloaded ${summary}` : `reload failed: ${current.status ?? next.layoutError ?? "unknown error"}`}`,
 				`config  ${describeConfigSource(next)}`,
 			];
 			for (const warning of warnings) lines.push(`warn    ${warning}`);
@@ -108,13 +115,14 @@ export async function handleSplashCommand(pi: ExtensionAPI, ctx: ExtensionComman
 		}
 		case "status": {
 			const tools = await preflight();
+			// A partially rendered splash (one canvas failed, another worked) still
+			// has a reason worth showing, so the status is never dropped silently.
+			const built = framesSummary(current.frames) ?? "pending";
 			const lines = [
 				`config  ${describeConfig(current.config)}`,
 				`source  ${describeConfigSource(current.config)}`,
 				`header  ${current.installed ? (current.banner?.isVisible() ? "installed" : "hidden") : "not installed"}`,
-				current.frames
-					? `frames  ${current.frames.frames.length}/${current.frames.totalFrames} @ ${formatSize({ width: current.frames.width, height: current.frames.height })} ${current.frames.colorMode}${current.frames.fromCache ? " (cache)" : " (fresh)"}`
-					: `frames  pending${current.status ? ` — ${current.status}` : ""}`,
+				`frames  ${current.status ? `${built} — ${current.status}` : built}`,
 				`tools   ${tools.ok ? Object.values(tools.versions).join(" | ") : `missing: ${tools.missing.join(", ")}`}`,
 				`listing ${describeListing(current)}`,
 			];

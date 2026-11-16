@@ -10,9 +10,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	collectResources,
-	extensionEntrySuffix,
-	extensionLabel,
+	compactPathLabels,
+	labelFromSourceInfo,
 	getPiVersion,
+	packageEntryLabel,
 	packageNameFromSpec,
 	packageShortName,
 	parsePiVersion,
@@ -66,33 +67,27 @@ describe("packageNameFromSpec", () => {
 	});
 });
 
-describe("extensionEntrySuffix", () => {
-	test("drops ./, extensions/ and index/main files", () => {
-		expect(extensionEntrySuffix("./src/index.ts")).toBe("src");
-		expect(extensionEntrySuffix("./dist/index.ts")).toBe("dist");
-		expect(extensionEntrySuffix("./extensions/btw.ts")).toBe("btw.ts");
-		expect(extensionEntrySuffix("extensions/workflow.ts")).toBe("workflow.ts");
-		expect(extensionEntrySuffix("./dist/agent/billion-context.js")).toBe("dist/agent/billion-context.js");
-		expect(extensionEntrySuffix("./")).toBe("");
-		expect(extensionEntrySuffix("./index.ts")).toBe("");
-	});
-});
-
-describe("extensionLabel", () => {
-	// The exact shapes from the machine this was written for.
-	test("renders the installed packages as pkg:entry", () => {
-		const cases: Array<[string, string, string]> = [
+describe("packageEntryLabel", () => {
+	// The exact shapes pi prints on startup for the machine this was written on.
+	test("renders installed packages as pkg:entry, exactly like pi", () => {
+		const cases: Array<[string, string | undefined, string]> = [
 			["@graelo/pi-vim", "./src/index.ts", "@graelo/pi-vim:src"],
 			["@juicesharp/rpiv-ask-user-question", "./index.ts", "@juicesharp/rpiv-ask-user-question"],
 			["@narumitw/pi-usage", "./dist/index.ts", "@narumitw/pi-usage:dist"],
-			["@plannotator/pi-extension", "./", "@plannotator/pi-extension"],
+			["@plannotator/pi-extension", "./", "@plannotator/pi-extension:"],
 			["@quintinshaw/pi-dynamic-workflows", "extensions/workflow.ts", "@quintinshaw/pi-dynamic-workflows:workflow.ts"],
 			["billion-context", "./dist/agent/billion-context.js", "billion-context:dist/agent/billion-context.js"],
 			["pi-btw", "./extensions/btw.ts", "pi-btw:btw.ts"],
-			["pi-starline", "./extensions", "pi-starline:starline"],
+			["pi-starline", "./starline/index.ts", "pi-starline:starline"],
 			["pi-web-access", "./dist", "pi-web-access:dist"],
 		];
-		for (const [name, entry, expected] of cases) expect(extensionLabel(name, entry)).toBe(expected);
+		for (const [name, entry, expected] of cases) expect(packageEntryLabel(name, entry)).toBe(expected);
+	});
+
+	test("only an index entry collapses; other files keep their name", () => {
+		expect(packageEntryLabel("pkg", "./main.js")).toBe("pkg:main.js");
+		expect(packageEntryLabel("pkg", "extensions/bridge.ts")).toBe("pkg:bridge.ts");
+		expect(packageEntryLabel("pkg", undefined)).toBe("pkg");
 	});
 
 	test("packageShortName drops the scope and the pi- prefix", () => {
@@ -100,6 +95,63 @@ describe("extensionLabel", () => {
 		expect(packageShortName("@scope/pi-thing")).toBe("thing");
 		expect(packageShortName("@scope/plain")).toBe("plain");
 		expect(packageShortName("pi-")).toBe("pi-");
+	});
+});
+
+describe("compactPathLabels", () => {
+	test("shortens local extensions to the shortest unique suffix", () => {
+		expect(compactPathLabels(["/home/u/.pi/agent/extensions/foo/index.ts"])).toEqual(["foo"]);
+		expect(compactPathLabels(["/p/.pi/extensions/foo/index.ts", "/p/.pi/extensions/bar/index.ts"])).toEqual(["foo", "bar"]);
+	});
+
+	test("keeps more segments when the leaf name collides", () => {
+		expect(compactPathLabels(["/p/.pi/extensions/a/thing.ts", "/p/.pi/extensions/b/thing.ts"])).toEqual([
+			"a/thing.ts",
+			"b/thing.ts",
+		]);
+	});
+});
+
+describe("labelFromSourceInfo", () => {
+	test("derives a package label from the source path", () => {
+		expect(
+			labelFromSourceInfo({
+				path: "/x/npm/node_modules/pi-btw/extensions/btw.ts",
+				source: "npm:pi-btw",
+				scope: "user",
+				origin: "package",
+				baseDir: "/x/npm/node_modules/pi-btw",
+			}),
+		).toBe("pi-btw:btw.ts");
+	});
+
+	test("keeps the colon of an empty package entry", () => {
+		expect(
+			labelFromSourceInfo({
+				path: "/x/npm/node_modules/@s/pi-extension",
+				source: "npm:@s/pi-extension",
+				scope: "user",
+				origin: "package",
+				baseDir: "/x/npm/node_modules/@s/pi-extension",
+			}),
+		).toBe("@s/pi-extension:");
+	});
+
+	test("falls back to the path suffix for a local extension", () => {
+		expect(
+			labelFromSourceInfo({ path: "/home/me/.pi/agent/extensions/foo/index.ts", source: "/home/me/.pi/agent/extensions/foo/index.ts", scope: "user", origin: "top-level" }),
+		).toBe("foo");
+	});
+
+	test("ignores pi's own built-ins, which pi keeps out of its startup list", () => {
+		expect(labelFromSourceInfo({ path: "builtin:llama.cpp", source: "builtin", scope: "temporary", origin: "top-level" })).toBeUndefined();
+		expect(labelFromSourceInfo({ path: "<temporary:acp>", source: "temporary", scope: "temporary", origin: "top-level" })).toBeUndefined();
+	});
+
+	test("ignores git sources and missing paths", () => {
+		expect(labelFromSourceInfo({ path: "/x/foo.ts", source: "git:github.com/a/b", scope: "user", origin: "package" })).toBeUndefined();
+		expect(labelFromSourceInfo(undefined)).toBeUndefined();
+		expect(labelFromSourceInfo({ path: "", source: "npm:x", scope: "user", origin: "package" })).toBeUndefined();
 	});
 });
 
@@ -127,7 +179,7 @@ describe("collectResources", () => {
 		expect(resources.extensions).toEqual([
 			"@scope/tool:dist",
 			"ghost",
-			"local-thin",
+			"local-thin.ts",
 			"pi-btw:btw.ts",
 		]);
 		expect(resources.thinking).toBe("high");
@@ -142,6 +194,88 @@ describe("collectResources", () => {
 			settings: { packages: ["npm:missing"] } as unknown as Settings,
 		});
 		expect(resources.extensions).toEqual(["missing"]);
+	});
+
+	test("a directory entry resolves to the file pi actually loads", async () => {
+		const agentDir = tempDir();
+		const cwd = tempDir();
+		writeManifest(agentDir, "pi-starline", ["./extensions"]);
+		const shipped = join(agentDir, "npm", "node_modules", "pi-starline", "extensions", "starline");
+		mkdirSync(shipped, { recursive: true });
+		writeFileSync(join(shipped, "index.ts"), "");
+		writeManifest(agentDir, "pi-root", ["./"]);
+
+		const resources = await collectResources({
+			cwd,
+			agentDir,
+			settings: { packages: ["npm:pi-starline", "npm:pi-root"] } as unknown as Settings,
+		});
+		// `pi-starline` ships `./extensions`, so pi prints `pi-starline:starline`;
+		// a package-root entry keeps its colon, exactly like pi's startup list.
+		expect(resources.extensions).toEqual(["pi-root:", "pi-starline:starline"]);
+	});
+
+	test("several commands of one extension add one label, never the command names", async () => {
+		const agentDir = tempDir();
+		const cwd = tempDir();
+		writeManifest(agentDir, "billion-context", ["./dist/agent/billion-context.js"]);
+		const entry = join(agentDir, "npm", "node_modules", "billion-context", "dist", "agent", "billion-context.js");
+		mkdirSync(join(agentDir, "npm", "node_modules", "billion-context", "dist", "agent"), { recursive: true });
+		writeFileSync(entry, "");
+		const sourceInfo = {
+			path: entry,
+			source: "npm:billion-context",
+			scope: "user" as const,
+			origin: "package" as const,
+			baseDir: join(agentDir, "npm", "node_modules", "billion-context"),
+		};
+		const resources = await collectResources({
+			cwd,
+			agentDir,
+			settings: { packages: ["npm:billion-context"] } as unknown as Settings,
+			commands: [
+				{ name: "acp", source: "extension", sourceInfo },
+				{ name: "acp-cache", source: "extension", sourceInfo },
+			],
+		});
+		// pi lists extensions, not the slash commands they register, so the panel
+		// must not grow `acp` / `acp-cache` next to `billion-context:…`.
+		expect(resources.extensions).toEqual(["billion-context:dist/agent/billion-context.js"]);
+	});
+
+	test("a command-only extension is labelled by its path, not by the command name", async () => {
+		const cwd = tempDir();
+		const entry = join(cwd, ".pi", "extensions", "oddity", "index.ts");
+		const resources = await collectResources({
+			cwd,
+			agentDir: tempDir(),
+			settings: {},
+			commands: [
+				{
+					name: "odd",
+					source: "extension",
+					sourceInfo: { path: entry, source: entry, scope: "project", origin: "top-level" },
+				},
+			],
+		});
+		expect(resources.extensions).toEqual(["oddity"]);
+	});
+
+	test("a built-in command never becomes an extension row", async () => {
+		const cwd = tempDir();
+		const resources = await collectResources({
+			cwd,
+			agentDir: tempDir(),
+			settings: {},
+			commands: [
+				{
+					name: "llama",
+					source: "extension",
+					sourceInfo: { path: "builtin:llama.cpp", source: "builtin", scope: "temporary", origin: "top-level" },
+				},
+			],
+		});
+		expect(resources.extensions).toEqual([]);
 	});
 
 	test("reports unknown thinking/model without throwing", async () => {

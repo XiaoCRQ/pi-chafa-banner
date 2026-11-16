@@ -6,6 +6,8 @@
  * and docs can share one description. No I/O here.
  */
 
+import type { ChafaPlan, LayoutGroup, LayoutNode, SplashSettings } from "../layout/tree.ts";
+
 export interface BannerSize {
 	width: number;
 	height: number;
@@ -18,6 +20,9 @@ export type PanelField = "version" | "model" | "gif" | "frames";
 export type ResourceSectionId = "context" | "skills" | "extensions";
 
 export type AutoSize = number | "auto";
+
+/** Root height: `"auto"` = exactly as tall as the content needs. */
+export type HeightSetting = number | "auto";
 
 /** `"auto"` = the gif's own timing, a number = fixed frames per second. */
 export type RateSetting = number | "auto";
@@ -59,6 +64,11 @@ export interface ImageSettings {
 	chafa: string;
 }
 
+/**
+ * Legacy layout knobs, kept as a resolved mirror so the current renderer keeps
+ * compiling while it is ported to the layout tree. New configs never set these;
+ * `splash` and `layoutTree` are the source of truth.
+ */
 export interface LayoutSettings {
 	/** Overall splash width in cells; each of the two columns gets half of it. */
 	width: number;
@@ -94,11 +104,11 @@ export interface PanelsSettings {
  * call sites do not have to walk three levels for `fps`.
  */
 export interface BannerConfig {
-	version: 1;
+	version: 2;
 	gifPath: string | undefined;
 	/**
-	 * Chafa canvas, derived — never configured: `layout.width` split into two
-	 * equal columns (minus `layout.gap`), height from the gif's aspect ratio.
+	 * Canvas of the first chafa node — the frames pipeline renders exactly this.
+	 * Never configured directly: it falls out of the tree, weights and gap.
 	 */
 	size: BannerSize;
 	fps: RateSetting;
@@ -109,7 +119,22 @@ export interface BannerConfig {
 	enabled: boolean;
 	/** Detach pi's own `[Context]/[Skills]/…` listing below the splash. */
 	hideResources: boolean;
+	/** Root box semantics: width/height/gap and the variable-size flags. */
+	splash: SplashSettings;
+	/** Parsed recursive layout; undefined exactly when `layoutError` is set. */
+	layoutTree: LayoutNode | undefined;
+	/** Structural config error, rendered as a `LAYOUT ERROR` card (never thrown). */
+	layoutError: string | undefined;
+	/** One canvas per chafa node, solved from config + weights + gap. */
+	plans: ChafaPlan[];
+	/**
+	 * Box width `plans` were solved for. The renderer compares it with the width
+	 * the terminal allows and asks the session to rebuild when they differ.
+	 */
+	planWidth: number;
+	/** Compatibility mirror of `splash` for the pre-tree renderer. */
 	layout: LayoutSettings;
+	/** Compatibility mirror, derived from `layoutTree`, for the pre-tree renderer. */
 	panels: PanelsSettings;
 	/** Palette: preset plus any per-role hex overrides. */
 	theme: ThemeSettings;
@@ -124,26 +149,75 @@ export interface ConfigSource {
 	warnings: string[];
 }
 
+/**
+ * Default splash: artwork above the coding-agent card on the left, the resource
+ * list on the right — the layout this extension has always drawn.
+ *
+ * It lives here (not in `layout/tree.ts`) to keep the module graph acyclic:
+ * `layout/tree.ts` imports `autoHeightFor` from this module, so this module may
+ * only import types back. `layout/tree.ts` re-exports it for layout consumers.
+ */
+export const DEFAULT_LAYOUT: LayoutGroup = {
+	type: "layout",
+	weight: 1,
+	mode: "horizontal",
+	children: [
+		{
+			type: "layout",
+			weight: 5,
+			mode: "vertical",
+			children: [
+				{ type: "chafa", weight: 1 },
+				{
+					type: "window",
+					weight: 1,
+					title: "CODING AGENT",
+					content: [
+						{ type: "inline", title: "Version", content: "version" },
+						{ type: "inline", title: "Model", content: "model" },
+					],
+				},
+			],
+		},
+		{
+			type: "window",
+			weight: 5,
+			title: "RESOURCES",
+			content: [
+				{ type: "outline", title: "Context", content: "context" },
+				{ type: "outline", title: "Skills", content: "skills" },
+				{ type: "outline", title: "Extensions", content: "extensions", stacked: true },
+			],
+		},
+	],
+};
+
 /** Defaults as they appear in the JSON file. `null` path = "not configured". */
 export const DEFAULT_FILE = {
-	version: 1,
+	version: 2,
 	image: {
 		path: "~/Pictures/logo/v-3.gif",
 		fps: "auto",
 		stride: 3,
 		chafa: "",
 	},
-	layout: { width: 88, gap: 2, twoColumnMinWidth: 76, compactMinWidth: 32, maxWidth: 108, lowerRows: 12 },
-	panels: {
-		info: { enabled: true, fields: ["version", "model"] },
-		resources: {
-			enabled: true,
-			sections: ["context", "skills", "extensions"],
-			width: "auto",
-			height: "auto",
-			maxLinesPerSection: 6,
-		},
-	},
+	width: 88,
+	/**
+	 * Height floor. `"auto"` asks for exactly the rows the content needs; a number
+	 * is a floor the content may raise (see `variableHeight`). 17 is the stock
+	 * tree at `width: 88`: a 12-row canvas + 1 gap + the 4 rows of a two-entry
+	 * `CODING AGENT` card, i.e. the card shows exactly its two rows and no blanks.
+	 */
+	height: 17,
+	/**
+	 * Blank cells between siblings, per axis. Separate values because a character
+	 * cell is roughly twice as tall as it is wide: two columns look like one row.
+	 */
+	gap: { width: 2, height: 1 },
+	variableWidth: false,
+	variableHeight: false,
+	compactWidth: 32,
+	layout: DEFAULT_LAYOUT,
 	theme: { preset: "tokyonight" },
 	behavior: { enabled: true, static: false, hidePiResourceList: true },
 } as const;
@@ -169,7 +243,9 @@ export const LIMITS = {
 	fps: { min: 1, max: 30 },
 	stride: { min: 1, max: 10 },
 	width: { min: 8, max: 160 },
-	height: { min: 4, max: 60 },
+	height: { min: 4, max: 80 },
+	weight: { min: 1, max: 100 },
+	compactWidth: { min: 20, max: 80 },
 	layoutWidth: { min: 24, max: 200 },
 	gap: { min: 0, max: 12 },
 	lowerRows: { min: 4, max: 40 },

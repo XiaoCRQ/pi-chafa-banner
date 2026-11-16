@@ -1,39 +1,77 @@
 {
   "$schema": "./pi-chafa-banner.schema.json",
-  "version": 1,
+  "version": 2,
   "image": {
     "path": "~/Pictures/logo/v-3.gif",
     "fps": "auto",
     "stride": 3,
     "chafa": ""
   },
-  "layout": {
-    "width": 88,
-    "gap": 2,
-    "twoColumnMinWidth": 76,
-    "compactMinWidth": 32,
-    "maxWidth": 108,
-    "lowerRows": 12
+  "width": 88,
+  "height": 17,
+  "gap": {
+    "width": 2,
+    "height": 1
   },
-  "panels": {
-    "info": {
-      "enabled": true,
-      "fields": [
-        "version",
-        "model"
-      ]
-    },
-    "resources": {
-      "enabled": true,
-      "sections": [
-        "context",
-        "skills",
-        "extensions"
-      ],
-      "width": "auto",
-      "height": "auto",
-      "maxLinesPerSection": 6
-    }
+  "variableWidth": false,
+  "variableHeight": false,
+  "compactWidth": 32,
+  "layout": {
+    "type": "layout",
+    "mode": "horizontal",
+    "children": [
+      {
+        "type": "layout",
+        "weight": 5,
+        "mode": "vertical",
+        "children": [
+          {
+            "type": "chafa",
+            "weight": 1
+          },
+          {
+            "type": "window",
+            "weight": 1,
+            "title": "CODING AGENT",
+            "content": [
+              {
+                "type": "inline",
+                "title": "Version",
+                "content": "version"
+              },
+              {
+                "type": "inline",
+                "title": "Model",
+                "content": "model"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "window",
+        "weight": 5,
+        "title": "RESOURCES",
+        "content": [
+          {
+            "type": "outline",
+            "title": "Context",
+            "content": "context"
+          },
+          {
+            "type": "outline",
+            "title": "Skills",
+            "content": "skills"
+          },
+          {
+            "type": "outline",
+            "title": "Extensions",
+            "content": "extensions",
+            "stacked": true
+          }
+        ]
+      }
+    ]
   },
   "theme": {
     "preset": "tokyonight",

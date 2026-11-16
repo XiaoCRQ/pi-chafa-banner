@@ -15,7 +15,8 @@ import type { BannerResources } from "../resources.ts";
 export interface SessionState {
 	config: BannerConfig;
 	resources: BannerResources;
-	frames?: FrameSet;
+	/** Pre-rendered frames per `ChafaPlan.key`. */
+	frames?: Map<string, FrameSet>;
 	banner?: Banner;
 	tui?: TUI;
 	ctx?: ExtensionContext;
@@ -28,6 +29,11 @@ export interface SessionState {
 	detached?: DetachedListing;
 	detachAttempts: number;
 	lastDetachAt: number;
+	/** Set by `bootstrap`: re-solve canvases for a width the terminal can show. */
+	onWidthRequest?: (width: number) => void;
+	/** Newest width the render loop asked for, waiting out the debounce. */
+	pendingWidth?: number;
+	resizeTimer?: ReturnType<typeof setTimeout>;
 }
 
 /** The live session, or `undefined` before `session_start` / after shutdown. */
@@ -54,6 +60,20 @@ export function createState(config: BannerConfig, resources: BannerResources): S
 /** One-line summary of what was built, for `/splash rebuild|reload`. */
 export function contentSummary(current: SessionState): string | undefined {
 	const frames = current.frames;
-	if (!frames) return undefined;
-	return `${frames.frames.length} frames at ${formatSize({ width: frames.width, height: frames.height })}`;
+	if (!frames || frames.size === 0) return undefined;
+	const sets = [...frames.values()];
+	const first = sets[0]!;
+	const detail = `${first.frames.length} frames at ${formatSize({ width: first.width, height: first.height })}`;
+	return sets.length > 1 ? `${sets.length} canvases, ${detail} (first)` : detail;
+}
+
+/** `/splash status` frame line for the keyed frame map. */
+export function framesSummary(frames: Map<string, FrameSet> | undefined): string | undefined {
+	if (!frames || frames.size === 0) return undefined;
+	const sets = [...frames.values()];
+	const first = sets[0]!;
+	const head =
+		`${first.frames.length}/${first.totalFrames} @ ${formatSize({ width: first.width, height: first.height })} ` +
+		`${first.colorMode}${first.fromCache ? " (cache)" : " (fresh)"}`;
+	return sets.length > 1 ? `${head} +${sets.length - 1} more` : head;
 }

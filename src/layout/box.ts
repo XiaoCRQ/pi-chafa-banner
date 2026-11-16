@@ -150,7 +150,7 @@ export function panel(
 	const targetBody = options.fillTo === undefined ? undefined : Math.max(0, options.fillTo - 2);
 	for (const line of body) {
 		if (targetBody !== undefined && rows.length >= targetBody) break;
-		rows.push(border(style.v) + " " + truncateToWidth(line, contentWidth, "…", true) + " " + border(style.v));
+		rows.push(border(style.v) + " " + truncateToWidth(line, contentWidth, "...", true) + " " + border(style.v));
 	}
 	if (targetBody !== undefined) {
 		const blank = border(style.v) + " ".repeat(contentWidth + 2) + border(style.v);
@@ -159,6 +159,24 @@ export function panel(
 
 	const bottom = border(style.bl) + border(style.h.repeat(inner)) + border(style.br);
 	return [truncateToWidth(top, w, ""), ...rows, bottom];
+}
+
+/**
+ * One `[Label] value` row: the bracketed label reuses the `[Context]` heading
+ * style, the suffix keeps its own width budget so a long value degrades to an
+ * ellipsis instead of pushing the thinking level off the row.
+ *
+ * Shared by `infoBox` (the pre-tree info card) and the tree renderer's `inline`
+ * content specs, so both shapes stay identical.
+ */
+export function formatInfoRow(row: InfoRow, contentWidth: number, painter: Painter): string {
+	const label = painter.bold(painter.fg("sectionTitle", `[${row.label}]`));
+	const labelWidth = visibleWidth(label);
+	const suffix = row.suffix ? painter.fg("muted", row.suffix) : "";
+	const suffixWidth = suffix ? visibleWidth(suffix) + 1 : 0;
+	const valueWidth = Math.max(1, contentWidth - labelWidth - 1 - suffixWidth);
+	const value = painter.fg("text", truncateToWidth(row.value, valueWidth, "..."));
+	return `${label} ${value}${suffix ? ` ${suffix}` : ""}`;
 }
 
 /** Bordered card with one aligned `label  value` row per info field. */
@@ -170,19 +188,7 @@ export function infoBox(
 	options: PanelOptions = {},
 ): string[] {
 	const contentWidth = Math.max(0, Math.floor(width) - 4);
-	// One fact per line: `[Label] value`, where the bracketed label reuses the
-	// `[Context]` heading style of the RESOURCES panel.
-	const body = rows.map((row) => {
-		const label = painter.bold(painter.fg("sectionTitle", `[${row.label}]`));
-		const labelWidth = visibleWidth(label);
-		// The suffix keeps its own budget, so a long model name degrades to an
-		// ellipsis instead of pushing the thinking level off the card.
-		const suffix = row.suffix ? painter.fg("muted", row.suffix) : "";
-		const suffixWidth = suffix ? visibleWidth(suffix) + 1 : 0;
-		const valueWidth = Math.max(1, contentWidth - labelWidth - 1 - suffixWidth);
-		const value = painter.fg("text", truncateToWidth(row.value, valueWidth, "…"));
-		return `${label} ${value}${suffix ? ` ${suffix}` : ""}`;
-	});
+	const body = rows.map((row) => formatInfoRow(row, contentWidth, painter));
 	return panel(title, body, width, painter, options);
 }
 
@@ -216,7 +222,7 @@ export function wrapNames(names: readonly string[], width: number, maxLines = Nu
 			continue;
 		}
 		const prefix = hasItem ? `${current}, ` : current;
-		current = prefix + truncateToWidth(name, avail - visibleWidth(prefix), "…");
+		current = prefix + truncateToWidth(name, avail - visibleWidth(prefix), "...");
 		hasItem = true;
 		overflow = true;
 		break;
@@ -231,7 +237,7 @@ function appendEllipsis(line: string, width: number): string {
 	const combined = `${line}, ...`;
 	if (visibleWidth(combined) <= width) return combined;
 	const room = width - visibleWidth(", ...");
-	return room <= 0 ? truncateToWidth(line, width, "…") : `${truncateToWidth(line, room, "")}, ...`;
+	return room <= 0 ? truncateToWidth(line, width, "...") : `${truncateToWidth(line, room, "")}, ...`;
 }
 
 /**
@@ -268,7 +274,7 @@ export function stackNames(names: readonly string[], width: number, maxLines = N
 	const limit = Math.max(1, Math.floor(maxLines));
 	const overflow = names.length > limit;
 	const shown = overflow ? limit - 1 : names.length;
-	const out = names.slice(0, shown).map((name) => indent + truncateToWidth(name, avail - indent.length, "…"));
+	const out = names.slice(0, shown).map((name) => indent + truncateToWidth(name, avail - indent.length, "..."));
 	if (!overflow) return out;
 	if (shown === 0) {
 		const first = indent + truncateToWidth(names[0] ?? "", Math.max(1, avail - indent.length - 5), "");

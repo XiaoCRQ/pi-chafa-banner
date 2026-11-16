@@ -58,5 +58,5 @@ export function compactSplash(width: number, painter: Painter, info: { version: 
 		painter.fg("text", model),
 		painter.fg("dim", "chafa"),
 	];
-	return lines.map((line) => centerVisible(truncateToWidth(line, Math.max(1, width), "…"), width).trimEnd());
+	return lines.map((line) => centerVisible(truncateToWidth(line, Math.max(1, width), "..."), width).trimEnd());
 }

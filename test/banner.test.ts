@@ -5,7 +5,7 @@ import { CHROME_ROWS, plainPainter } from "../src/layout.ts";
 import type { FrameSet } from "../src/frames.ts";
 import { emptyResources, type BannerResources } from "../src/resources.ts";
 import type { Theme, TUI } from "@earendil-works/pi-coding-agent";
-import { maxVisibleWidth, visibleWidth } from "../src/text.ts";
+import { maxVisibleWidth, stripAnsi, visibleWidth } from "../src/text.ts";
 
 const theme: Theme = {
 	fg: (_token, text) => text,
@@ -92,12 +92,28 @@ describe("Banner.render width contract", () => {
 		banner.dispose();
 	});
 
-	test("stacks the panel below the art on narrow terminals", () => {
-		const { banner } = makeBanner({ frames: frames() });
-		const stacked = banner.render(60);
+	test("a narrow terminal keeps the configured tree and shrinks the canvas", async () => {
+		// `height: "auto"` keeps the block content-sized, so the narrower grid's
+		// shorter canvas is visible instead of being padded to the 40-row floor.
+		const { banner } = makeBanner({
+			frames: frames(),
+			cfg: { ...config, splash: { ...config.splash, height: null } },
+		});
+		const requested: number[] = [];
+		banner.onWidthChange = (width) => requested.push(width);
+		const narrow = banner.render(60);
+		// The tree is fixed: both windows stay side by side. The canvas is re-planned
+		// for the columns that fit (aspect ratio kept), so the block gets shorter
+		// instead of the artwork being cut off at the sides.
+		expect(stripAnsi(narrow[0] as string)).toContain("RESOURCES");
+		expect(stripAnsi(narrow.join("\n"))).toContain("CODING AGENT");
 		const wide = banner.render(100);
-		expect(stacked.length).toBeGreaterThan(wide.length);
-		expect(stacked.join("\n")).toContain("RESOURCES");
+		expect(narrow.length).toBeLessThan(wide.length);
+		// One request for the new grid, deferred off the render path (asking the
+		// session to rebuild frames inside `render()` would fight pi's layout).
+		expect(requested).toEqual([]);
+		await Promise.resolve();
+		expect(requested).toEqual([60]);
 		banner.dispose();
 	});
 
@@ -183,7 +199,7 @@ describe("Banner animation controls", () => {
 
 	test("statusLine summarizes the state", () => {
 		const { banner } = makeBanner({ frames: frames() });
-		expect(banner.statusLine()).toContain("size=43x22");
+		expect(banner.statusLine()).toContain("image=43x22");
 		expect(banner.statusLine()).toContain("frames=3/3");
 		banner.dispose();
 	});
@@ -194,6 +210,67 @@ describe("Banner animation controls", () => {
 		const first = banner.render(100);
 		banner.setFrameIndex(2);
 		expect(banner.render(100)).not.toEqual(first);
+		banner.dispose();
+	});
+});
+
+describe("Banner error card", () => {
+	test("a structural config error replaces the whole splash", () => {
+		const message = 'layout.children[1].type: expected one of chafa, layout, window (got "chart")';
+		const { banner } = makeBanner({ frames: frames(), cfg: { ...config, layoutError: message } });
+		const lines = banner.render(100);
+		const text = stripAnsi(lines.join("\n"));
+		expect(text).toContain("LAYOUT ERROR");
+		expect(text).toContain("layout.children[1].type");
+		expect(text).not.toContain("RESOURCES");
+		for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(100);
+		banner.dispose();
+	});
+
+	test("a size allocation failure renders the same card instead of throwing", () => {
+		// A gap wider than the terminal makes the two columns unallocatable; the
+		// LayoutError must surface as a card, never as an exception into pi.
+		const { banner } = makeBanner({ frames: frames(), cfg: { ...config, splash: { ...config.splash, gap: { width: 200, height: 0 } } } });
+		expect(() => banner.render(100)).not.toThrow();
+		const text = stripAnsi(banner.render(100).join("\n"));
+		expect(text).toContain("LAYOUT ERROR");
+		expect(text).toContain("needs at least");
+		banner.dispose();
+	});
+});
+
+describe("Banner size semantics", () => {
+	test("variableHeight=false clips content above the configured height", () => {
+		const cfg: BannerConfig = { ...config, splash: { ...config.splash, height: 20, variableHeight: false } };
+		const { banner } = makeBanner({ frames: frames(), cfg });
+		const lines = banner.render(100);
+		expect(lines.length).toBe(20);
+		expect(stripAnsi(lines.join("\n"))).toContain("...");
+		banner.dispose();
+	});
+
+	test("variableHeight=true grows the window until the content fits", () => {
+		const cfg: BannerConfig = { ...config, splash: { ...config.splash, height: 20, variableHeight: true } };
+		const { banner } = makeBanner({ frames: frames(), cfg });
+		const lines = banner.render(100);
+		// The natural height (art + gap + info card) wins over the 20-row setting.
+		expect(lines.length).toBeGreaterThan(20);
+		const text = stripAnsi(lines.join("\n"));
+		expect(text).toContain("CODING AGENT");
+		expect(text).toContain("RESOURCES");
+		// Both columns still close on the last row: nothing was cut vertically.
+		expect((lines[lines.length - 1] as string).split("╰")).toHaveLength(3);
+		banner.dispose();
+	});
+
+	test("spare height stays blank instead of shrinking the block", () => {
+		const cfg: BannerConfig = { ...config, splash: { ...config.splash, height: 40, variableHeight: true } };
+		const { banner } = makeBanner({ frames: frames(), cfg, rows: 60 });
+		const lines = banner.render(100);
+		expect(lines.length).toBe(40);
+		// The windows absorb the slack: no content is dropped to save rows.
+		expect(stripAnsi(lines.join("\n"))).toContain("CODING AGENT");
+		expect(lines.some((line) => stripAnsi(line).trim() !== "")).toBe(true);
 		banner.dispose();
 	});
 });

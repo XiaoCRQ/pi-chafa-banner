@@ -5,10 +5,14 @@
  * are pre-rendered by `frames.ts` and this class only indexes into them. The
  * timer just bumps the index, invalidates, and asks pi for a redraw.
  *
- * Layout: the artwork sits at the top left, the info card right beneath it, and
- * the RESOURCES panel runs down the right-hand side. When the terminal is too
- * narrow for two columns the right panel drops below the left block, and below
- * `layout.compactMinWidth` everything collapses into three plain lines.
+ * Layout lives in `layout/render-tree.ts`: this class owns the lifecycle (timer,
+ * pause/resume, freeze, dispose) and hands the tree renderer the root box. Every
+ * window and canvas is a `LayoutNode` from the config, so there is exactly one
+ * render path and no hard-coded two-column split here anymore.
+ *
+ * Errors stay visible: a structural config error and a `LayoutError` raised by
+ * the size allocation both render the `LAYOUT ERROR` card. `render()` never
+ * throws into pi.
  *
  * Lifecycle: created inside the `setHeader` factory (which hands us the live
  * `tui` + `theme`), paused while the agent is streaming, disposed on
@@ -16,38 +20,38 @@
  */
 
 import type { Component, Theme, TUI } from "@earendil-works/pi-coding-agent";
-import { columnWidthFor, type BannerConfig } from "../config.ts";
+import type { BannerConfig } from "../config.ts";
 import type { FrameSet } from "../frames.ts";
+import type { ChafaPlan } from "../layout/tree.ts";
+import { centerBlock } from "../layout/compose.ts";
+import { themePainter, type Painter } from "../layout/box.ts";
+import { splashRows } from "../layout/metrics.ts";
+import { renderLayoutError, renderSplash, type RenderContext } from "../layout/render-tree.ts";
 import { DEFAULT_FRAME_DELAY_MS } from "../pipeline/timing.ts";
-import { buildStatusLine, charPlaceholder, describeConfig, infoRows as infoRowsFor, sections as sectionsFor, statusLines as statusLinesFor } from "./panels.ts";
-import {
-	MIN_PANEL_WIDTH,
-	blockWidthFor,
-	centerBlock,
-	compactSplash,
-	infoBox,
-	resourcePanel,
-	splashRows,
-	themePainter,
-	twoColumn,
-	type Painter,
-	type ResourceSection,
-} from "../layout.ts";
 import type { BannerResources } from "../resources.ts";
-import { padVisible, truncateToWidth, visibleWidth } from "../text.ts";
-
-/**
- * Height of the info card is exactly `panels.info.fields + 2` borders — it is
- * measured, never padded, so the splash carries no empty rows.
- */
-/** Width of the gap between the two columns. */
-const COLUMN_GAP_MIN = 2;
+import { truncateToWidth } from "../text.ts";
+import { buildStatusLine, contentContext } from "./panels.ts";
 
 export interface BannerInit {
 	config: BannerConfig;
 	resources: BannerResources;
-	frames?: FrameSet;
+	/**
+	 * Frames per `ChafaPlan.key`. A bare `FrameSet` is wrapped by `framesByKey()`
+	 * so single-canvas callers (tests, previews) keep working.
+	 */
+	frames?: Map<string, FrameSet> | FrameSet;
 	status?: string;
+}
+
+/**
+ * Wrap one canvas in the keyed map the renderer expects.
+ *
+ * `plan` is the canvas the frames were built for; when it is unknown the entry
+ * still renders because a one-entry map is matched to any node.
+ */
+export function framesByKey(plan: ChafaPlan | undefined, frames: FrameSet | undefined): Map<string, FrameSet> | undefined {
+	if (!frames) return undefined;
+	return new Map([[plan?.key ?? "", frames]]);
 }
 
 export class Banner implements Component {
@@ -58,10 +62,17 @@ export class Banner implements Component {
 	private painter: Painter;
 	private config: BannerConfig;
 	private resources: BannerResources;
-	private frames: FrameSet | undefined;
+	private frames: Map<string, FrameSet> | undefined;
 	private status: string | undefined;
 	private frameIndex = 0;
 	private timer: ReturnType<typeof setTimeout> | undefined;
+	/**
+	 * Session hook: the terminal can show a narrower box than the frames were
+	 * built for, so the session re-solves the canvases off the render path.
+	 */
+	onWidthChange?: (width: number) => void;
+	/** Last width already asked for; keeps an animation tick from re-asking. */
+	private requestedWidth: number | undefined;
 	private visible: boolean;
 	private frozen: boolean;
 	private paused = false;
@@ -76,7 +87,7 @@ export class Banner implements Component {
 		this.painter = themePainter(theme, init.config.theme);
 		this.config = init.config;
 		this.resources = init.resources;
-		this.frames = init.frames;
+		this.frames = normalizeFrames(init.config, init.frames);
 		this.status = init.status;
 		this.visible = init.config.enabled;
 		this.frozen = init.config.static;
@@ -84,9 +95,10 @@ export class Banner implements Component {
 
 	// -- data ---------------------------------------------------------------
 
-	setFrames(frames: FrameSet | undefined): void {
-		this.frames = frames;
-		const count = frames?.frames.length ?? 0;
+	setFrames(frames: Map<string, FrameSet> | FrameSet | undefined): void {
+		this.frames = normalizeFrames(this.config, frames);
+		this.requestedWidth = undefined;
+		const count = this.frameCount();
 		if (count === 0) this.frameIndex = 0;
 		else this.frameIndex %= count;
 		this.start();
@@ -104,6 +116,7 @@ export class Banner implements Component {
 
 	setConfig(config: BannerConfig): void {
 		this.config = config;
+		this.requestedWidth = undefined;
 		// `/splash reload` may have changed the palette; rebuild the painter so the
 		// next render picks it up without recycling the header component.
 		this.painter = themePainter(this.theme, config.theme);
@@ -148,8 +161,19 @@ export class Banner implements Component {
 		return this.frozen;
 	}
 
+	/** The canvas that drives the animation clock (first chafa node with frames). */
+	private primaryFrames(): FrameSet | undefined {
+		const frames = this.frames;
+		if (!frames || frames.size === 0) return undefined;
+		for (const plan of this.config.plans) {
+			const set = frames.get(plan.key);
+			if (set) return set;
+		}
+		return frames.values().next().value;
+	}
+
 	private frameCount(): number {
-		return this.frames?.frames.length ?? 0;
+		return this.primaryFrames()?.frames.length ?? 0;
 	}
 
 	// -- animation ----------------------------------------------------------
@@ -174,7 +198,7 @@ export class Banner implements Component {
 	private frameDelay(): number {
 		const fps = this.config.fps;
 		if (typeof fps === "number" && fps > 0) return Math.max(Banner.MIN_FRAME_MS, Math.round(1000 / fps));
-		const delay = this.frames?.delays[this.frameIndex];
+		const delay = this.primaryFrames()?.delays[this.frameIndex];
 		return Math.max(Banner.MIN_FRAME_MS, Math.round(delay ?? DEFAULT_FRAME_DELAY_MS));
 	}
 
@@ -232,124 +256,70 @@ export class Banner implements Component {
 	}
 
 	statusLine(): string {
-		return buildStatusLine(this.config, this.frames, this.frozen);
+		return buildStatusLine(this.config, this.primaryFrames(), this.frozen);
 	}
 
 	// -- rendering ----------------------------------------------------------
 
-	private currentFrame(): string[] | undefined {
-		const frames = this.frames;
-		if (!frames || frames.frames.length === 0) return undefined;
-		const index = Math.min(this.frameIndex, frames.frames.length - 1);
-		return frames.frames[index];
+	private renderContext(): RenderContext {
+		const primary = this.primaryFrames();
+		const context: RenderContext = {
+			painter: this.painter,
+			plans: this.config.plans,
+			frames: this.frames ?? new Map<string, FrameSet>(),
+			frameIndex: this.frameIndex,
+			content: contentContext(
+				this.config,
+				this.resources,
+				primary ? `${primary.frames.length}/${primary.totalFrames}` : undefined,
+			),
+			settings: this.config.splash,
+			planWidth: this.config.planWidth,
+		};
+		if (this.config.gifPath !== undefined) context.gifPath = this.config.gifPath;
+		context.chafaArgs = this.config.chafaArgs;
+		context.onWidth = (width) => this.requestWidth(width);
+		if (this.status !== undefined) context.status = this.status;
+		return context;
+	}
+
+	/** Ask the session for frames at `width`, at most once per width. */
+	private requestWidth(width: number): void {
+		if (this.requestedWidth === width) return;
+		this.requestedWidth = width;
+		// Never rebuild synchronously inside `render()`: pi is mid-layout here.
+		queueMicrotask(() => this.onWidthChange?.(width));
+	}
+
+	/** One card for every layout failure: config structure or size allocation. */
+	private errorCard(message: string, cols: number): string[] {
+		const width = Math.max(1, Math.min(cols, Math.max(20, this.config.splash.width)));
+		// Same viewport budget as `renderSplash`: a card must never push pi's editor
+		// off screen. One row is reserved for the status line underneath.
+		const room = Math.max(3, splashRows(this.tui.terminal?.rows ?? 40) - 1);
+		const card = renderLayoutError(message, width, this.painter, room);
+		return centerBlock(card, cols).map((line) => truncateToWidth(line, cols, ""));
 	}
 
 	render(width: number): string[] {
 		if (!this.visible) return [];
-		const cols = Math.max(1, Math.floor(width));
-		const layout = this.config.layout;
-		// Too narrow for boxes: three plain lines, no picture.
-		if (cols < layout.compactMinWidth) {
-			return compactSplash(cols, this.painter, {
-				version: this.resources.version,
-				model: this.resources.model,
-				thinking: this.resources.thinking,
-			});
+		const cols = Math.max(1, Math.floor(Number.isFinite(width) ? width : 80));
+		if (this.config.layoutError !== undefined) return this.errorCard(this.config.layoutError, cols);
+		const tree = this.config.layoutTree;
+		if (!tree) {
+			return this.errorCard("layout: no layout tree configured (expected a chafa|layout|window node)", cols);
 		}
-
-		const blockWidth = blockWidthFor(cols, layout);
-		const frame = this.currentFrame();
-		const infoEnabled = this.config.panels.info.enabled;
-		const resourcesEnabled = this.config.panels.resources.enabled;
-
-		// The two columns are always equal: `blockWidth` splits in half around the
-		// gap, and the canvas is built at exactly that width. A narrower frame (a
-		// gif with a different aspect ratio) is centered inside its column.
-		const column = columnWidthFor(blockWidth, this.gap());
-		const twoColumns =
-			infoEnabled && resourcesEnabled && blockWidth >= layout.twoColumnMinWidth && column >= MIN_PANEL_WIDTH;
-
-		const left = this.leftColumn(blockWidth, twoColumns ? column : blockWidth, frame, twoColumns);
-		const right = resourcesEnabled
-			? resourcePanel("RESOURCES", this.sections(), twoColumns ? column : blockWidth, this.painter,
-					twoColumns ? left.length : this.stackedHeight(), {
-						maxLinesPerSection: this.config.panels.resources.maxLinesPerSection,
-					})
-			: [];
-
-		const lines = twoColumns
-			? twoColumn(left, right, this.gap(), blockWidth)
-			: [...centerBlock(left, blockWidth), ...(right.length > 0 ? ["", ...right] : [])];
-		const status = this.status ? [this.painter.fg("dim", truncateToWidth(this.status, blockWidth, "…"))] : [];
-		const padded = [...lines, ...status].map((line) => (line === "" ? "" : padVisible(line, blockWidth)));
-		if (padded.every((line) => line === "")) return [];
-		return centerBlock(padded, cols).map((line) => truncateToWidth(line, cols, ""));
-	}
-
-	/**
-	 * Left column: the artwork, a blank line, then the info card.
-	 *
-	 * The frame is clipped to whatever the document body has left after the info
-	 * card and the status line (a text banner that overflows pushes pi's editor
-	 * around). `layout.lowerRows` is the floor for the whole block.
-	 */
-	private leftColumn(blockWidth: number, leftWidth: number, frame: string[] | undefined, twoColumns: boolean): string[] {
-		const rows = frame
-			? this.cropFrame(frame, leftWidth, this.imageBudget(twoColumns))
-			: this.placeholder(leftWidth);
-		const out = [...rows];
-		const info = this.config.panels.info.enabled ? this.infoRows() : [];
-		if (info.length > 0) out.push("", ...infoBox("CODING AGENT", info, leftWidth, this.painter));
-		return out;
-	}
-
-	/** Rows the artwork may use: body height minus the info card, gap and status. */
-	private imageBudget(twoColumns: boolean): number {
-		const totalRows = splashRows(this.tui.terminal?.rows ?? 40);
-		const card = this.infoBoxRows();
-		const overhead = (card > 0 ? card + 1 : 0) + (this.status ? 1 : 0);
-		const stacked = twoColumns ? 0 : this.stackedHeight() + 1;
-		return Math.max(1, totalRows - overhead - stacked);
-	}
-
-	/** Rows the info card needs: one per configured fact, plus the two borders. */
-	private infoBoxRows(): number {
-		return this.config.panels.info.enabled ? this.config.panels.info.fields.length + 2 : 0;
-	}
-
-	/** Height of the RESOURCES panel when it sits below the left block. */
-	private stackedHeight(): number {
-		const wanted = this.config.panels.resources.height;
-		return Math.max(this.config.layout.lowerRows, typeof wanted === "number" ? wanted : 0);
-	}
-
-	/** Clip chafa's frame to `rows` lines starting from the top (faces live there). */
-	private cropFrame(frame: readonly string[], width: number, rows: number): string[] {
-		const out: string[] = [];
-		for (const line of frame.slice(0, Math.max(1, rows))) {
-			const trimmed = truncateToWidth(line, width, "");
-			const pad = Math.max(0, Math.floor((width - visibleWidth(trimmed)) / 2));
-			out.push(" ".repeat(pad) + trimmed);
-		}
-		return out;
-	}
-
-	/** "No picture yet": a five-row card that keeps the block size stable. */
-	private placeholder(width: number): string[] {
-		return charPlaceholder(this.painter, this.status, width, Math.min(this.config.size.height, 5));
-	}
-
-	private gap(): number {
-		return Math.max(COLUMN_GAP_MIN, this.config.layout.gap);
-	}
-
-	private infoRows(): Array<{ label: string; value: string }> {
-		return infoRowsFor(this.config, this.resources, this.frames);
-	}
-
-	private sections(): ResourceSection[] {
-		return sectionsFor(this.config, this.resources);
+		// `splashRows()` and the status row are applied inside `renderSplash`, so
+		// the terminal height is passed raw and the renderer owns the viewport.
+		return renderSplash(tree, this.renderContext(), { width: cols, height: this.tui.terminal?.rows ?? 40 });
 	}
 }
 
-export { describeConfig as describeBannerConfig } from "./panels.ts";
+function normalizeFrames(
+	config: BannerConfig,
+	frames: Map<string, FrameSet> | FrameSet | undefined,
+): Map<string, FrameSet> | undefined {
+	if (!frames) return undefined;
+	if (frames instanceof Map) return frames;
+	return framesByKey(config.plans[0], frames);
+}

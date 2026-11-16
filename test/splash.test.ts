@@ -4,7 +4,7 @@
  *
  *   - no returned line is wider than the width passed to render()
  *   - the block is horizontally centered (left/right slack differ by <= 1 col)
- *   - narrow terminals switch from two columns to the stacked layout
+ *   - a narrow terminal keeps the configured tree (no implicit re-stacking)
  *   - box titles are centered in the top border
  *
  * No pi process, no chafa: the frame set is synthesized and the theme is a stub.
@@ -126,15 +126,17 @@ describe("composed splash width contract", () => {
 });
 
 describe("responsive layout", () => {
-	test("narrow width (60) stacks the resources panel below the info card", () => {
+	test("narrow width (60) keeps both windows side by side", () => {
 		const banner = makeBanner();
 		const lines = banner.render(60).map(stripAnsi);
+		// No width threshold re-stacks the tree any more: the windows get narrower
+		// and their bodies are truncated instead.
+		expect(lines[0]).toContain("RESOURCES");
 		const infoIndex = lines.findIndex((line) => line.includes("CODING AGENT"));
-		const resourcesIndex = lines.findIndex((line) => line.includes("RESOURCES"));
 		expect(infoIndex).toBeGreaterThan(0);
-		expect(resourcesIndex).toBeGreaterThan(infoIndex);
-		// The panel is a standalone full-width box, not a side column.
-		expect(lines[resourcesIndex]).toContain("╭");
+		expect(lines[infoIndex]).toContain("╭");
+		expect(lines[infoIndex]!.indexOf("RESOURCES")).toBe(-1);
+		for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(60);
 		banner.dispose();
 	});
 

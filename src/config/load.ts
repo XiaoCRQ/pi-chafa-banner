@@ -13,9 +13,14 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseChafaArgs } from "../pipeline/args.ts";
+import { NODE_MIN, planChafaNodes, plansForWidth, type ChafaPlan, type LayoutNode, type SplashSettings } from "../layout/tree.ts";
 import {
+	BANNER_MAX_WIDTH,
+	BANNER_MIN_STACK_WIDTH,
 	DEFAULT_FILE,
 	LIMITS,
+	PANEL_FIELDS,
+	RESOURCE_SECTIONS,
 	clamp,
 	derivedCanvas,
 	formatSize,
@@ -23,9 +28,11 @@ import {
 	type BannerSize,
 	type ConfigSource,
 	type LayoutSettings,
+	type PanelField,
 	type PanelsSettings,
+	type ResourceSectionId,
 } from "./schema.ts";
-import { validateSettings } from "./validate.ts";
+import { validateSettings, type ValidatedSettings } from "./validate.ts";
 
 export function expandHome(input: string): string {
 	if (input === "~") return homedir();
@@ -109,21 +116,94 @@ function resolveGifPath(configured: string | undefined, root: string): string | 
 }
 
 /**
- * Refine the canvas height once the actual artwork dimensions are known.
+ * Refine every planned canvas once the actual artwork dimensions are known.
  *
  * Terminal cells are ~9x18 px, so a `srcH/srcW` aspect ratio becomes
- * `width * aspect * 0.5` character rows. Called from the build path, right
- * before frames are rendered; the pipeline needs a fixed grid for its cache key.
+ * `width * aspect * 0.5` character rows. Pure data in, new array out: the
+ * pipeline needs a fixed grid for its cache key, so the plan is rebuilt before
+ * frames are rendered and never touched afterwards.
+ */
+export function applyPlanAspect(plans: readonly ChafaPlan[], source: { width: number; height: number }): ChafaPlan[] {
+	if (!(source.width > 0) || !(source.height > 0)) return [...plans];
+	return plans.map((plan) => {
+		const height = planHeightFor(plan, source);
+		return height === plan.height ? plan : { ...plan, height };
+	});
+}
+
+/**
+ * Re-solve every canvas for a box the terminal can actually show.
+ *
+ * The configured `width` stays the width the user asked for; only the plans (and
+ * with them the frame cache key) move. Heights keep whatever aspect ratio the
+ * session already probed, so a narrower box scales the artwork down instead of
+ * cropping it. Returns the same config object when nothing changes.
+ */
+export function applyPlanWidth(config: BannerConfig, width: number): BannerConfig {
+	const tree = config.layoutTree;
+	if (!tree || config.plans.length === 0) return config;
+	const target = clamp(Math.floor(width), LIMITS.width.min, LIMITS.width.max);
+	if (config.planWidth === target) return config;
+	const plans = plansForWidth(tree, config.splash, target, config.plans, config.gifPath, config.chafaArgs);
+	const first = plans[0];
+	if (!first) return config;
+	return { ...config, plans, planWidth: target, size: { width: first.width, height: first.height } };
+}
+
+function planHeightFor(plan: ChafaPlan, source: { width: number; height: number }): number {
+	if (!(source.width > 0) || !(source.height > 0)) return plan.height;
+	return clamp(
+		Math.round((plan.width * source.height) / source.width / 2),
+		NODE_MIN.chafa.height,
+		LIMITS.height.max,
+	);
+}
+
+/**
+ * Per-image variant of `applyPlanAspect`: the layout may point several `chafa`
+ * nodes at different files, so each plan takes the aspect of its own artwork.
+ * Plans whose image could not be probed keep their width-derived height.
+ */
+export function applyPlanSources(
+	config: BannerConfig,
+	sources: ReadonlyMap<string, { width: number; height: number }>,
+): BannerConfig {
+	if (config.plans.length === 0 || sources.size === 0) return config;
+	let changed = false;
+	const plans = config.plans.map((plan) => {
+		const source = sources.get(plan.image);
+		if (!source) return plan;
+		const height = planHeightFor(plan, source);
+		if (height === plan.height) return plan;
+		changed = true;
+		return { ...plan, height };
+	});
+	if (!changed) return config;
+	const first = plans[0]!;
+	return { ...config, plans, size: { width: first.width, height: first.height } };
+}
+
+/**
+ * `applyPlanAspect` at the config level: the frames pipeline only reads
+ * `config.size`, so the first chafa canvas is mirrored back onto it.
  */
 export function applySourceSize(config: BannerConfig, source: { width: number; height: number }): BannerConfig {
 	if (!(source.width > 0) || !(source.height > 0)) return config;
-	const height = clamp(
-		Math.round((config.size.width * source.height) / source.width / 2),
-		LIMITS.height.min,
-		LIMITS.height.max,
-	);
-	if (height === config.size.height) return config;
-	return { ...config, size: { ...config.size, height } };
+	if (config.plans.length === 0) {
+		// No tree (layout error) — keep the old single-canvas behaviour.
+		const height = clamp(
+			Math.round((config.size.width * source.height) / source.width / 2),
+			LIMITS.height.min,
+			LIMITS.height.max,
+		);
+		return height === config.size.height ? config : { ...config, size: { ...config.size, height } };
+	}
+	const plans = applyPlanAspect(config.plans, source);
+	const first = plans[0]!;
+	if (first.width === config.size.width && first.height === config.size.height) {
+		return plans.every((plan, index) => plan === config.plans[index]) ? config : { ...config, plans };
+	}
+	return { ...config, size: { width: first.width, height: first.height }, plans };
 }
 
 /**
@@ -153,28 +233,107 @@ export function loadConfig(options: LoadOptions = {}): BannerConfig {
 
 	const settings = validateSettings(parsed);
 	warnings.push(...settings.warnings);
+	const gifPath = resolveGifPath(settings.image.path, root);
 	const source: ConfigSource = { path: text !== undefined ? path : undefined, warnings };
 
-	// The canvas is derived, not configured: two equal columns, so the artwork is
-	// exactly one column wide and the height follows the gif's aspect ratio.
-	const layout: LayoutSettings = settings.layout;
-	const size: BannerSize = derivedCanvas(layout);
-	const panels: PanelsSettings = settings.panels;
+	return assemble(settings, gifPath, source);
+}
+
+/**
+ * Resolve parsed settings into the flat config the renderer consumes.
+ *
+ * The chafa canvases are solved here, once, from config + weights + gap only —
+ * never from the terminal size, so the frames can be pre-rendered and the
+ * render loop stays synchronous.
+ */
+function assemble(settings: ValidatedSettings, gifPath: string | undefined, source?: ConfigSource): BannerConfig {
+	const chafaArgs = parseChafaArgs(settings.image.chafa);
+	const plans: ChafaPlan[] = settings.layoutTree
+		? planChafaNodes(settings.layoutTree, settings.splash, gifPath, chafaArgs)
+		: [];
+	const layout = mirrorLayout(settings.splash);
+	const size: BannerSize = plans[0]
+		? { width: plans[0].width, height: plans[0].height }
+		: derivedCanvas(layout);
 
 	return {
-		version: 1,
-		gifPath: resolveGifPath(settings.image.path, root),
+		version: DEFAULT_FILE.version,
+		gifPath,
 		size,
 		fps: settings.image.fps,
 		stride: settings.image.stride,
-		chafaArgs: parseChafaArgs(settings.image.chafa),
+		chafaArgs,
 		static: settings.static,
 		enabled: settings.enabled,
 		hideResources: settings.hideResources,
+		splash: settings.splash,
+		layoutTree: settings.layoutTree,
+		layoutError: settings.layoutError,
+		plans,
+		planWidth: settings.splash.width,
 		layout,
-		panels,
+		panels: mirrorPanels(settings.layoutTree),
 		theme: settings.theme,
-		source,
+		source: source ?? { warnings: [] },
+	};
+}
+
+/**
+ * Compatibility mirror for the pre-tree renderer, until it is ported to the
+ * layout tree: the flat knobs it still reads, derived from `splash`.
+ */
+function mirrorLayout(splash: SplashSettings): LayoutSettings {
+	return {
+		width: splash.width,
+		gap: splash.gap.width,
+		twoColumnMinWidth: BANNER_MIN_STACK_WIDTH,
+		compactMinWidth: splash.compactWidth,
+		maxWidth: BANNER_MAX_WIDTH,
+		lowerRows: 12,
+	};
+}
+
+/** Window titled `title`, searched depth-first. */
+function findWindow(node: LayoutNode, title: string): Extract<LayoutNode, { type: "window" }> | undefined {
+	if (node.type === "window") return node.title === title ? node : undefined;
+	if (node.type === "layout") {
+		for (const child of node.children) {
+			const found = findWindow(child, title);
+			if (found) return found;
+		}
+	}
+	return undefined;
+}
+
+/**
+ * Compatibility mirror for the pre-tree renderer: which info fields and
+ * resource sections the tree actually shows. No tree (layout error) disables
+ * both panels so the old path cannot draw a splash next to the error card.
+ */
+function mirrorPanels(tree: LayoutNode | undefined): PanelsSettings {
+	const fields: PanelField[] = [];
+	const sections: ResourceSectionId[] = [];
+	if (tree) {
+		const info = findWindow(tree, "CODING AGENT");
+		for (const spec of info?.content ?? []) {
+			const field = PANEL_FIELDS.find((candidate) => candidate === spec.content);
+			if (field && !fields.includes(field)) fields.push(field);
+		}
+		const resources = findWindow(tree, "RESOURCES");
+		for (const spec of resources?.content ?? []) {
+			const section = RESOURCE_SECTIONS.find((candidate) => candidate === spec.content);
+			if (section && !sections.includes(section)) sections.push(section);
+		}
+	}
+	return {
+		info: { enabled: fields.length > 0, fields },
+		resources: {
+			enabled: sections.length > 0,
+			sections,
+			width: "auto",
+			height: "auto",
+			maxLinesPerSection: 6,
+		},
 	};
 }
 
@@ -202,14 +361,17 @@ export function describeConfigSource(config: BannerConfig): string {
 /** One-line summary used by `/splash status`. */
 export function describeConfig(config: BannerConfig): string {
 	const theme = config.theme;
+	const splash = config.splash;
 	const overrides = (["windowTitle", "sectionTitle", "border", "content"] as const)
 		.filter((role) => theme[role])
 		.map((role) => `${role}=${theme[role]}`);
 	return [
 		`gif=${config.gifPath ?? "(none)"}`,
 		`image=${formatSize(config.size)} (derived)`,
-		`gap=${config.layout.gap}`,
-		`layout=${config.layout.width}`,
+		`width=${splash.width}${splash.variableWidth ? "+" : ""}`,
+		`height=${splash.height === null ? "auto" : `${splash.height}${splash.variableHeight ? "+" : ""}`}`,
+		`gap=${splash.gap.width}/${splash.gap.height}`,
+		config.layoutError ? "layout=error" : `nodes=${countNodes(config.layoutTree)}`,
 		`fps=${config.fps === "auto" ? "native" : config.fps}`,
 		`stride=${config.stride}`,
 		`static=${config.static}`,
@@ -218,6 +380,12 @@ export function describeConfig(config: BannerConfig): string {
 	]
 		.filter((part): part is string => part !== undefined)
 		.join("  ");
+}
+
+/** Nodes in the tree, chafa + layout + window, for `/splash status`. */
+function countNodes(tree: LayoutNode | undefined): number {
+	if (!tree) return 0;
+	return tree.type === "layout" ? 1 + tree.children.reduce((sum, child) => sum + countNodes(child), 0) : 1;
 }
 
 export { DEFAULT_FILE };
@@ -233,21 +401,4 @@ export const BUNDLED_GIF_PATH = bundledGifPath(PACKAGE_ROOT);
  * Exported as a whole object because tests and the preview script spread it to
  * build variants; it is intentionally the same shape `loadConfig()` returns.
  */
-export const DEFAULTS: BannerConfig = {
-	version: 1,
-	gifPath: BUNDLED_GIF_PATH,
-	size: derivedCanvas(DEFAULT_FILE.layout),
-	fps: DEFAULT_FILE.image.fps,
-	stride: DEFAULT_FILE.image.stride,
-	chafaArgs: parseChafaArgs(DEFAULT_FILE.image.chafa),
-	static: DEFAULT_FILE.behavior.static,
-	enabled: DEFAULT_FILE.behavior.enabled,
-	hideResources: DEFAULT_FILE.behavior.hidePiResourceList,
-	layout: { ...DEFAULT_FILE.layout },
-	panels: {
-		info: { ...DEFAULT_FILE.panels.info, fields: [...DEFAULT_FILE.panels.info.fields] },
-		resources: { ...DEFAULT_FILE.panels.resources, sections: [...DEFAULT_FILE.panels.resources.sections] },
-	},
-	theme: { ...DEFAULT_FILE.theme },
-	source: { warnings: [] },
-};
+export const DEFAULTS: BannerConfig = assemble(validateSettings(undefined), BUNDLED_GIF_PATH);

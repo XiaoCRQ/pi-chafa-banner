@@ -26,7 +26,8 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { Banner } from "../src/banner.ts";
 import {
-	applySourceSize,
+	applyPlanSources,
+	applyPlanWidth,
 	clamp,
 	DEFAULTS,
 	formatSize,
@@ -34,6 +35,7 @@ import {
 	loadConfig,
 	parseHexColor,
 	parseSize,
+	piAgentDir,
 	THEME_PRESETS,
 	THEME_ROLES,
 	type BannerConfig,
@@ -41,13 +43,13 @@ import {
 	type ThemePreset,
 	type ThemeRole,
 } from "../src/config.ts";
-import { FrameError, loadFrames, preflight, type FrameSet } from "../src/frames.ts";
+import { FrameError, loadPlanFrames, preflight, type FrameBundle } from "../src/frames.ts";
 import { argsDigest, parseChafaArgs } from "../src/pipeline/args.ts";
 import { probeSourceSize } from "../src/pipeline/process.ts";
 import { describeTiming } from "../src/pipeline/timing.ts";
 import { visibleWidth } from "../src/text.ts";
 import { collectResources, emptyResources, type BannerResources } from "../src/resources.ts";
-import type { Theme, TUI } from "@earendil-works/pi-coding-agent";
+import type { Settings, Theme, TUI } from "@earendil-works/pi-coding-agent";
 
 interface Args {
 	/** Simulated terminal width in columns. */
@@ -98,7 +100,7 @@ const USAGE = `usage: bun run scripts/preview.ts [flags]
   --frame N           first animation frame
   --rows N            simulated terminal height (default $LINES or 40)
   --no-frames         skip chafa and show the placeholder/degraded card
-  --real-resources    scan the current machine instead of stub resources
+  --real-resources    scan the current machine (incl. ~/.pi/agent/settings.json) instead of stubs
   --plain             disable colors
   --chafa "ARGS"      extra chafa flags (same syntax as image.chafa)
   --theme NAME        palette preset: tokyonight (default) | pi
@@ -291,13 +293,24 @@ function stubResources(): BannerResources {
 	};
 }
 
+/** `~/.pi/agent/settings.json`, so `--real-resources` really sees the packages. */
+function readPiSettings(): Settings {
+	try {
+		const raw = readFileSync(join(piAgentDir(), "settings.json"), "utf8");
+		const parsed: unknown = JSON.parse(raw);
+		return parsed && typeof parsed === "object" ? (parsed as Settings) : {};
+	} catch {
+		return {};
+	}
+}
+
 async function resolveResources(real: boolean): Promise<BannerResources> {
 	if (!real) return stubResources();
 	try {
 		const scanned = await collectResources({
 			cwd: process.cwd(),
 			commands: [],
-			settings: {},
+			settings: readPiSettings(),
 			model: undefined,
 			thinking: "high",
 		});
@@ -337,29 +350,45 @@ function checkLayout(lines: readonly string[], width: number, terminalRows: numb
 async function main(): Promise<void> {
 	const args = parseArgs(process.argv.slice(2));
 	const config: BannerConfig = { ...loadJsonConfig(args.config), enabled: true };
-	if (args.gif) config.gifPath = args.gif;
+	if (args.gif) {
+		config.gifPath = args.gif;
+		config.plans = config.plans.map((plan) => ({ ...plan, image: args.gif as string }));
+	}
 	if (args.size) {
-		config.size = parseSize(args.size, config.size);
+		// `--size` only overrides the first canvas: it exists to tune one picture,
+		// not to resize a whole multi-canvas layout.
+		const size = parseSize(args.size, config.size);
+		config.size = size;
+		const [first, ...rest] = config.plans;
+		config.plans = first ? [{ ...first, width: size.width, height: size.height }, ...rest] : [];
 	}
 	if (args.fps !== undefined) config.fps = args.fps;
 	if (args.chafa !== undefined) config.chafaArgs = parseChafaArgs(args.chafa);
 	if (args.theme) config.theme = { ...config.theme, preset: args.theme };
 	if (Object.keys(args.colors).length > 0) config.theme = { ...config.theme, ...args.colors };
 	if (args.static) config.static = true;
-	if (!args.size && config.gifPath) {
-		try {
-			Object.assign(config, applySourceSize(config, await probeSourceSize(config.gifPath)));
-		} catch {
-			// Missing ffmpeg: the width-derived height is a fine fallback.
+	if (!args.size && config.plans.length > 0) {
+		// Canvas heights follow each artwork's aspect ratio; the width already came
+		// from the config + weights, so the frames can be pre-rendered.
+		const sources = new Map<string, { width: number; height: number }>();
+		for (const image of new Set(config.plans.map((plan) => plan.image).filter(Boolean))) {
+			try {
+				sources.set(image, await probeSourceSize(image));
+			} catch {
+				// Missing ffmpeg: the width-derived height is a fine fallback.
+			}
 		}
+		Object.assign(config, applyPlanSources(config, sources));
+		// Mirror the runtime: the terminal caps the box, and the canvases are solved
+		// for the width that actually fits (pi asks the session to rebuild on resize;
+		// the preview just builds the right size up front).
+		Object.assign(config, applyPlanWidth(config, Math.min(config.splash.width, args.width)));
 	}
 
 	stubTerminal.rows = args.rows;
 	stubTerminal.columns = args.width;
 
-	let frames: FrameSet | undefined;
-	const status: string | undefined = undefined;
-
+	let bundle: FrameBundle | undefined;
 	if (args.useFrames) {
 		const tools = await preflight();
 		if (!tools.ok) {
@@ -374,33 +403,42 @@ async function main(): Promise<void> {
 
 		const started = Date.now();
 		try {
-			frames = await loadFrames(config, args.colorMode, {});
-			console.error(
-				`preview: ${frames.frames.length}/${frames.totalFrames} frames @ ${frames.width}x${frames.height} ${frames.colorMode}` +
-					` stride=${frames.stride}${frames.fromCache ? " (cache)" : " (fresh)"} in ${Date.now() - started}ms`,
-			);
+			bundle = await loadPlanFrames(config, args.colorMode, {});
 		} catch (error) {
 			const message = error instanceof FrameError ? error.message : error instanceof Error ? error.message : String(error);
 			console.error(`preview: cannot build frames — ${message}`);
 			console.error(`  point image.path in ${config.source.path ?? "pi-chafa-banner.json"} at a readable gif`);
 			process.exit(1);
 		}
+		const primary = bundle.primary;
+		if (primary) {
+			console.error(
+				`preview: ${primary.frames.length}/${primary.totalFrames} frames @ ${primary.width}x${primary.height} ${primary.colorMode}` +
+					` stride=${primary.stride}${primary.fromCache ? " (cache)" : " (fresh)"} in ${Date.now() - started}ms` +
+					(config.plans.length > 1 ? `, ${bundle.frames.size} canvas(es)` : ""),
+			);
+		}
+		for (const error of bundle.errors) console.error(`preview: canvas failed — ${error}`);
+		if (bundle.frames.size === 0) {
+			console.error(`preview: no canvas could be rendered; showing the placeholder card`);
+		}
 	}
 
 	const banner = new Banner(stubTui, stubTheme(args.plain, args.colorMode), {
 		config,
 		resources: await resolveResources(args.realResources),
-		frames,
-		status,
+		frames: bundle?.frames,
+		status: bundle && bundle.errors.length > 0 ? bundle.errors.join("; ") : undefined,
 	});
 
-	const total = frames?.frames.length ?? 0;
+	const primary = bundle?.primary;
+	const total = primary?.frames.length ?? 0;
 
 	if (args.anim && total > 1) {
 		// Same rule as the component: an explicit `fps` wins, otherwise each frame
 		// uses the delay it carries (which is the gif's own timing).
 		const fixed = typeof config.fps === "number" ? config.fps : undefined;
-		const delays = frames?.delays ?? [];
+		const delays = primary?.delays ?? [];
 		const delayFor = (index: number): number =>
 			fixed !== undefined
 				? Math.max(20, Math.round(1000 / fixed))
@@ -449,7 +487,8 @@ async function main(): Promise<void> {
 	console.error(
 		`preview: ${count === 1 ? "1 frame" : `${count} frames`}, width ${args.width}, ` +
 			`${args.static ? "static" : `anim ${typeof config.fps === "number" ? `${config.fps} fps` : "native"}`}, size ${formatSize(config.size)}` +
-			(frames ? `, frame set ${frames.frames.length}/${frames.totalFrames}` : ", placeholder"),
+			(config.plans.length > 1 ? ` in ${config.plans.length} canvases` : "") +
+			(primary ? `, frame set ${primary.frames.length}/${primary.totalFrames}` : ", placeholder"),
 	);
 	banner.dispose();
 }

@@ -113,7 +113,7 @@ describe("infoBox", () => {
 		const lines = infoBox("T", [{ label: "Model", value: "x".repeat(200), suffix: "· high" }], 30, plainPainter);
 		expect(widths(lines).every((width) => width === 30)).toBe(true);
 		expect(lines[1]!.includes("· high")).toBe(true);
-		expect(lines[1]!.includes("…")).toBe(true);
+		expect(lines[1]!.includes("...")).toBe(true);
 	});
 
 	test("keeps the value readable when the label eats the width", () => {
@@ -164,7 +164,7 @@ describe("stackNames", () => {
 	test("truncates a single long name to the width", () => {
 		const lines = stackNames(["x".repeat(60)], 20);
 		expect(lines.length).toBe(1);
-		expect(lines[0]!.includes("…")).toBe(true);
+		expect(lines[0]!.includes("...")).toBe(true);
 		expect(visibleWidth(lines[0]!)).toBeLessThanOrEqual(20);
 	});
 });

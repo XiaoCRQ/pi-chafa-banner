@@ -13,11 +13,11 @@
  * means a shorter list.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
-import type { Settings, SlashCommandInfo } from "@earendil-works/pi-coding-agent";
+import { dirname, join, posix, relative, resolve } from "node:path";
+import type { Settings, SlashCommandInfo, SourceInfo } from "@earendil-works/pi-coding-agent";
 import { piAgentDir } from "./config.ts";
 import { run } from "./pipeline/process.ts";
 
@@ -46,7 +46,6 @@ export interface ResourceInput {
 	ownCommandName?: string;
 }
 
-const MAX_ITEMS_PER_SECTION = 48;
 const CONTEXT_NAMES = ["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
 const CONTEXT_SCAN_DEPTH = 6;
 
@@ -83,29 +82,46 @@ export function parsePiVersion(stdout: string): string {
 // labels
 // ---------------------------------------------------------------------------
 
-/** `pkg:extensions/foo/index.ts` -> `pkg`; `/a/b/foo.ts` -> `foo`; keeps @scopes. */
-export function shortExtensionLabel(raw: string): string {
-	let label = raw.trim().replace(/^\.\//, "");
-	if (!label) return "extension";
+/** Entry names a directory-style `pi.extensions` entry can resolve to. */
+const ENTRY_FILES = ["index.ts", "index.js", "index.mjs", "index.cjs"];
 
-	const colon = label.indexOf(":");
-	if (colon > 0) {
-		const head = label.slice(0, colon);
-		if (head && !/^(file|https?|git|ssh)$/i.test(head) && !/^[a-z]$/i.test(head)) {
-			// `packageName:relative/index` -> packageName
-			return head;
+/**
+ * The files pi would actually load for one manifest entry: the file itself, the
+ * `index.*` of a directory, or one entry per subdirectory (`pi-starline` ships
+ * `./extensions`, whose real entry is `extensions/starline/index.ts`).
+ */
+function resolveEntryFiles(base: string, entry: string): string[] {
+	const target = resolve(base, entry);
+	let info: ReturnType<typeof statSync>;
+	try {
+		info = statSync(target);
+	} catch {
+		return [];
+	}
+	if (info.isFile()) return [target];
+	if (!info.isDirectory()) return [];
+	for (const name of ENTRY_FILES) {
+		const file = join(target, name);
+		if (existsSync(file)) return [file];
+	}
+	const out: string[] = [];
+	let children: string[];
+	try {
+		children = readdirSync(target);
+	} catch {
+		return out;
+	}
+	for (const child of children) {
+		if (child.startsWith(".") || child === "node_modules") continue;
+		for (const name of ENTRY_FILES) {
+			const file = join(target, child, name);
+			if (existsSync(file)) {
+				out.push(file);
+				break;
+			}
 		}
 	}
-
-	label = label.replace(/^~\/?/, "");
-	label = label.replace(/\.(?:ts|js|mjs|cjs)$/i, "");
-	const parts = label.split(/[\\/]/).filter(Boolean);
-	if (parts.length === 0) return label || "extension";
-	if (label.startsWith("/") || /^[a-z]:/i.test(label)) {
-		return parts[parts.length - 1] ?? label;
-	}
-	if (parts[0]!.startsWith("@") && parts.length > 1) return `${parts[0]}/${parts[1]}`;
-	return parts[0]!;
+	return out;
 }
 
 /** `npm:@scope/pkg@1.2.3` -> `@scope/pkg`; anything that is not an npm spec -> undefined. */
@@ -127,35 +143,78 @@ export function packageShortName(name: string): string {
 }
 
 /**
- * Strip what carries no information once the package name is already printed:
- * `./`, a leading `extensions/`, a trailing `index.ts` / `main.js`, slashes.
- * `./src/index.ts` -> `src`, `./extensions/btw.ts` -> `btw.ts`.
+ * `npm:pi-btw` + `./extensions/btw.ts` -> `pi-btw:btw.ts`, the label pi prints
+ * in its own startup list (`getCompactExtensionLabel`). Rules, in order:
+ * drop `./`, drop a leading `extensions/`, an `index.*` entry collapses to its
+ * directory (`pi-web-access:dist`), the package root stays the bare name, and
+ * anything else keeps its relative path (`billion-context:dist/agent/x.js`).
+ * An empty entry keeps the colon (`@plannotator/pi-extension:`), exactly like
+ * pi does, so both lists read the same.
  */
-export function extensionEntrySuffix(entry: string): string {
-	let value = entry
-		.trim()
-		.replace(/^\.\/?/, "")
-		.replace(/\/+$/, "");
-	if (!value) return "";
-	value = value.replace(/^extensions(?:\/|$)/i, "").replace(/\/+$/, "");
-	value = value.replace(/(?:^|\/)(?:index|main)\.(?:[cm]?[jt]s)$/i, "");
-	return value.replace(/\/+$/, "");
+export function packageEntryLabel(name: string, entry: string | undefined): string {
+	if (entry === undefined) return name;
+	const packagePath = entry.trim().replace(/^\.\//, "").replace(/^extensions\//, "");
+	const dir = posix.dirname(packagePath);
+	if (posix.parse(packagePath).name === "index") return !dir || dir === "." ? name : `${name}:${dir}`;
+	return `${name}:${packagePath}`;
 }
 
 /**
- * `pi-btw` + `./extensions/btw.ts` -> `pi-btw:btw.ts`. Entries at the package
- * root (`./`, `./index.ts`) need no suffix at all; a bare `./extensions`
- * degrades to the short package name.
+ * Local extensions are shortened to the shortest path suffix that stays unique
+ * (`<agent>/extensions/foo/index.ts` -> `foo`), mirroring pi's
+ * `getCompactNonPackageExtensionLabel` so the panel matches its startup list.
  */
-export function extensionLabel(name: string, entry: string): string {
-	const cleaned = entry
-		.trim()
-		.replace(/^\.\/?/, "")
-		.replace(/\/+$/, "");
-	if (!cleaned) return name;
-	if (/^extensions$/i.test(cleaned)) return `${name}:${packageShortName(name)}`;
-	const suffix = extensionEntrySuffix(cleaned);
-	return suffix ? `${name}:${suffix}` : name;
+export function compactPathLabels(paths: readonly string[]): string[] {
+	const all = paths.map(displaySegments);
+	return all.map((segments, index) => {
+		for (let count = 1; count <= segments.length; count += 1) {
+			const candidate = segments.slice(-count).join("/");
+			const unique = all.every(
+				(other, otherIndex) => otherIndex === index || other.slice(-count).join("/") !== candidate,
+			);
+			if (unique) return candidate;
+		}
+		return segments.join("/");
+	});
+}
+
+/** Path segments pi would compare, with a trailing `index.*` dropped first. */
+function displaySegments(path: string): string[] {
+	const parts = homeLabel(path)
+		.split(/[\\/]/)
+		.filter((part) => part.length > 0 && part !== "~");
+	const last = parts[parts.length - 1] ?? "";
+	if (parts.length > 1 && /^index\.[cm]?[jt]s$/i.test(last)) parts.pop();
+	return parts;
+}
+
+/** Built-in / in-process extensions are addressed by a non-filesystem path. */
+const SYNTHETIC_PATH = /^(?:builtin:|<)/;
+
+/**
+ * Label for the extension that registered a command, derived from pi's
+ * `SourceInfo` rather than the command name: several commands of one extension
+ * (`btw:ask`, `acp`, `acp-cache`) must still read as that extension's own
+ * label — pi's startup list shows extensions, not the commands they add.
+ */
+export function labelFromSourceInfo(info: SourceInfo | undefined): string | undefined {
+	const target = info?.path?.trim();
+	if (!target) return undefined;
+	// pi gives its own extensions a synthetic path (`builtin:llama.cpp`,
+	// `<temporary:…>`) and marks them `hidden`, so `getCompactExtensionLabels()`
+	// never prints them. They are part of pi, not something the user installed.
+	if (SYNTHETIC_PATH.test(target)) return undefined;
+	const source = (info?.source ?? "").trim();
+	if (source === "builtin" || source === "temporary") return undefined;
+	if (source.startsWith("npm:")) {
+		const name = source.slice(4).trim();
+		if (!name) return undefined;
+		const base = info?.baseDir?.trim();
+		return base ? packageEntryLabel(name, relative(base, target)) : `${name}:`;
+	}
+	if (source.startsWith("git:")) return undefined;
+	const [label] = compactPathLabels([target]);
+	return label;
 }
 
 interface PackageManifest {
@@ -195,7 +254,8 @@ function uniqueSorted(values: Iterable<string>): string[] {
 		out.push(trimmed);
 	}
 	out.sort((a, b) => a.localeCompare(b));
-	return out.slice(0, MAX_ITEMS_PER_SECTION);
+	// Providers return everything; the window decides what fits, so no cap here.
+	return out;
 }
 
 function homeLabel(path: string): string {
@@ -274,6 +334,7 @@ export async function collectResources(input: ResourceInput): Promise<BannerReso
 		];
 
 		const extensionLabels: string[] = [];
+		const localPaths: string[] = [];
 		const roots = packageRoots(agentDir, cwd);
 
 		// `npm:` packages carry their entry point in `pi.extensions`; show it as
@@ -286,42 +347,65 @@ export async function collectResources(input: ResourceInput): Promise<BannerReso
 			if (!spec) continue;
 			const name = packageNameFromSpec(spec);
 			if (!name) {
-				extensionLabels.push(shortExtensionLabel(spec));
+				localPaths.push(spec);
 				continue;
 			}
-			const entry = roots.map((root) => manifestEntry(readManifest(join(root, name, "package.json")))).find(
-				(value) => value !== undefined,
-			);
+			const root = roots.find((candidate) => existsSync(join(candidate, name, "package.json")));
+			const entry = manifestEntry(root ? readManifest(join(root, name, "package.json")) : undefined);
 			packageKeys.add(name.toLowerCase());
 			packageKeys.add(packageShortName(name).toLowerCase());
 			packageKeys.add((name.split("/").pop() ?? name).toLowerCase());
-			extensionLabels.push(entry === undefined ? name : extensionLabel(name, entry));
+			const trimmed = (entry ?? "").trim();
+			if (entry === undefined) {
+				extensionLabels.push(name);
+				continue;
+			}
+			// pi resolves the entry to a real file before shortening, and a bare
+			// package-root entry keeps its colon (`@plannotator/pi-extension:`).
+			if (!trimmed || trimmed === "./") {
+				extensionLabels.push(`${name}:`);
+				continue;
+			}
+			const base = root ? join(root, name) : undefined;
+			const files = base ? resolveEntryFiles(base, trimmed) : [];
+			if (!base || files.length === 0) {
+				extensionLabels.push(packageEntryLabel(name, trimmed));
+				continue;
+			}
+			for (const file of files) extensionLabels.push(packageEntryLabel(name, relative(base, file)));
 		}
 
 		for (const dir of [join(agentDir, "extensions"), join(cwd, ".pi", "extensions")]) {
 			for (const name of await listDirNames(dir)) {
 				if (name.startsWith(".") || packageKeys.has(name.toLowerCase())) continue;
-				const manifest = readManifest(join(dir, name, "package.json"));
-				const entry = manifestEntry(manifest);
-				const pkgName = manifest?.name ?? name;
-				extensionLabels.push(entry === undefined ? shortExtensionLabel(name) : extensionLabel(pkgName, entry));
+				const base = join(dir, name);
+				const entry = manifestEntry(readManifest(join(base, "package.json")));
+				// pi shortens the entry file the loader really runs, so an extension
+				// directory reads as `foo` and its `dist/index.js` as `foo/dist`.
+				localPaths.push(entry === undefined ? join(base, "index.ts") : resolve(base, entry));
 			}
 		}
 
-		for (const raw of settings.extensions ?? []) extensionLabels.push(shortExtensionLabel(raw));
+		for (const raw of settings.extensions ?? []) localPaths.push(raw);
+		extensionLabels.push(...compactPathLabels(localPaths));
 
-		// Command names are the fallback for extensions that are neither a
-		// configured package nor a directory; `btw:ask` belongs to `pi-btw:btw.ts`.
+		// Commands are the fallback for extensions that are neither a configured
+		// package nor a directory. The label comes from the command's source path,
+		// never from the command name: `acp` and `acp-cache` both belong to
+		// `billion-context`, and pi's list shows the extension once.
 		const covered = new Set<string>();
 		for (const label of extensionLabels) {
 			const head = label.split(":")[0] ?? "";
 			covered.add(head.toLowerCase());
 			covered.add(packageShortName(head).toLowerCase());
 		}
-		for (const name of fromCommands(commands, "extension")) {
-			const base = name.split(":")[0] ?? name;
-			if (base === own || covered.has(base.toLowerCase())) continue;
-			extensionLabels.push(name);
+		for (const command of commands ?? []) {
+			if (command.source !== "extension") continue;
+			const label = labelFromSourceInfo(command.sourceInfo);
+			if (!label) continue;
+			const head = label.split(":")[0] ?? label;
+			if (head === own || covered.has(head.toLowerCase()) || covered.has(packageShortName(head).toLowerCase())) continue;
+			extensionLabels.push(label);
 		}
 
 		// The human name when pi knows one, the canonical `provider/id` otherwise:

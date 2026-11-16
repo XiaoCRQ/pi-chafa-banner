@@ -2,24 +2,158 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/XiaoCRQ/pi-chafa-banner/pi-chafa-banner.schema.json",
   "title": "pi-chafa-banner configuration",
-  "description": "Startup splash for the pi coding agent: an animated chafa-rendered gif at the top left, its info card below, the resource panel on the right. Every key is optional; a missing or invalid key falls back to the default.",
+  "description": "Startup splash for the pi coding agent, described as a recursive layout tree: chafa artwork, info windows and layout groups nested freely. Every key is optional; a missing or mistyped key falls back to its default, but a structurally broken layout is reported as a LAYOUT ERROR card instead of being silently redrawn.",
   "type": "object",
   "additionalProperties": true,
+  "definitions": {
+    "layoutNode": {
+      "description": "One node of the splash tree.",
+      "oneOf": [
+        {
+          "$ref": "#/definitions/chafaNode"
+        },
+        {
+          "$ref": "#/definitions/layoutGroup"
+        },
+        {
+          "$ref": "#/definitions/windowNode"
+        }
+      ]
+    },
+    "weight": {
+      "description": "Share of the parent's cells, relative to its siblings. A layout group splits the available width in horizontal mode and the available height in vertical mode. Any number greater than 0 (fractions such as 0.5 are fine); values above 100 are capped.",
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "default": 1
+    },
+    "chafaNode": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "const": "chafa"
+        },
+        "weight": {
+          "$ref": "#/definitions/weight"
+        },
+        "img": {
+          "description": "Gif for this node. Default: image.path, then the bundled asset. Used as given (no '~' expansion, relative paths resolve against the working directory), so an absolute path is safest.",
+          "type": "string"
+        },
+        "args": {
+          "description": "Extra chafa flags for this node only, e.g. \"--symbols block\". Merged after image.chafa; --probe, --animate and --clear are always dropped.",
+          "type": "string"
+        }
+      }
+    },
+    "layoutGroup": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "children"
+      ],
+      "properties": {
+        "type": {
+          "const": "layout"
+        },
+        "weight": {
+          "$ref": "#/definitions/weight"
+        },
+        "mode": {
+          "description": "horizontal = children side by side (weights split the width); vertical = stacked (weights split the height). Default: vertical.",
+          "enum": [
+            "horizontal",
+            "vertical"
+          ],
+          "default": "vertical"
+        },
+        "children": {
+          "description": "At least one child. Must not be empty.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/definitions/layoutNode"
+          }
+        }
+      }
+    },
+    "windowNode": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "content"
+      ],
+      "properties": {
+        "type": {
+          "const": "window"
+        },
+        "weight": {
+          "$ref": "#/definitions/weight"
+        },
+        "title": {
+          "description": "Heading in the box border, e.g. RESOURCES. Default: WINDOW.",
+          "type": "string"
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/contentSpec"
+          }
+        }
+      }
+    },
+    "contentSpec": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "content"
+      ],
+      "properties": {
+        "type": {
+          "description": "inline = [Title] value on one line; outline = title on its own line, value below.",
+          "type": "string",
+          "enum": [
+            "inline",
+            "outline"
+          ]
+        },
+        "title": {
+          "description": "Label. Defaults to the capitalised provider name.",
+          "type": "string"
+        },
+        "content": {
+          "description": "A registered provider name (version, model, context, skills, extensions) or a literal string.",
+          "type": "string"
+        },
+        "stacked": {
+          "description": "For list values: true = one entry per line, false = comma-wrapped. Default: false.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    }
+  },
   "properties": {
     "$schema": {
       "type": "string"
     },
     "version": {
-      "description": "Config format version. Currently 1; other values are read anyway with a warning.",
+      "description": "Config format version. Currently 2; a v1 file (flat layout/panels groups) is translated automatically with a warning.",
       "type": "integer",
-      "default": 1
+      "default": 2
     },
     "image": {
       "type": "object",
       "additionalProperties": true,
       "properties": {
         "path": {
-          "description": "Gif to animate. Absolute, or relative to the directory holding this file. '~' is expanded. Default: ~/Pictures/logo/v-3.gif, then the bundled assets/banner.gif.",
+          "description": "Default gif, used by chafa nodes without their own img. Absolute, or relative to the directory holding this file. '~' is expanded. When unset: ~/Pictures/logo/v-3.gif, then ~/Pictures/logo/v-1.gif, then the bundled asset.",
           "type": "string"
         },
         "fps": {
@@ -44,144 +178,85 @@
           "default": 3
         },
         "chafa": {
-          "description": "Extra chafa flags, as one string (e.g. \"--symbols block\" or \"-c 16\"). Quote each token that contains a space. --probe, --animate and --clear are dropped: the first makes chafa wait for a terminal reply and steal pi's stdin, the second breaks framing, the third wipes pi's screen. The size (-s) stays authoritative.",
+          "description": "Extra chafa flags shared by every chafa node, as one string (e.g. \"--symbols block\"). Quote each token that contains a space. --probe, --animate and --clear are dropped: the first makes chafa wait for a terminal reply and steal pi's stdin, the second breaks framing, the third wipes pi's screen. The size (-s) stays authoritative.",
           "type": "string",
           "maxLength": 512,
           "default": ""
         }
       }
     },
-    "layout": {
-      "type": "object",
-      "additionalProperties": true,
-      "properties": {
-        "width": {
-          "description": "Preferred total width of the splash block, in columns. Capped by the terminal and by maxWidth. Each of the two columns, and the chafa canvas, gets half of it minus the gap.",
-          "type": "integer",
-          "minimum": 24,
-          "maximum": 200,
-          "default": 88
-        },
-        "gap": {
-          "description": "Blank columns between the art/info column and the resource panel. The remaining width splits into two equal columns.",
+    "width": {
+      "description": "Preferred root width in columns. With variableWidth the box grows up to the natural content width; otherwise wider content is truncated with an ellipsis. Capped by the terminal.",
+      "type": "integer",
+      "minimum": 8,
+      "maximum": 160,
+      "default": 88
+    },
+    "height": {
+      "description": "Root height: a number is a floor the content may raise (default 17 = artwork plus the two-row CODING AGENT card); \"auto\" is exactly as tall as the content needs. With variableHeight false the configured value is a ceiling instead. Capped by the terminal.",
+      "type": [
+        "integer",
+        "string"
+      ],
+      "enum": [
+        "auto"
+      ],
+      "minimum": 4,
+      "maximum": 80,
+      "default": 17
+    },
+    "gap": {
+      "description": "Blank cells inserted between the children of every layout group, per axis. A bare number sets both. A character cell is about twice as tall as it is wide, so height 1 looks like width 2.",
+      "oneOf": [
+        {
           "type": "integer",
           "minimum": 0,
-          "maximum": 12,
-          "default": 2
+          "maximum": 12
         },
-        "twoColumnMinWidth": {
-          "description": "Below this width the lower block stacks instead of splitting into two panels.",
-          "type": "integer",
-          "minimum": 24,
-          "maximum": 200,
-          "default": 76
-        },
-        "compactMinWidth": {
-          "description": "Below this width the splash degrades to three plain lines.",
-          "type": "integer",
-          "minimum": 8,
-          "maximum": 200,
-          "default": 32
-        },
-        "maxWidth": {
-          "description": "Hard ceiling for the splash block, whatever the terminal says.",
-          "type": "integer",
-          "minimum": 24,
-          "maximum": 200,
-          "default": 108
-        },
-        "lowerRows": {
-          "description": "Rows reserved for the panels below the image.",
-          "type": "integer",
-          "minimum": 4,
-          "maximum": 40,
-          "default": 12
-        }
-      }
-    },
-    "panels": {
-      "type": "object",
-      "additionalProperties": true,
-      "properties": {
-        "info": {
+        {
           "type": "object",
-          "additionalProperties": true,
+          "additionalProperties": false,
           "properties": {
-            "enabled": {
-              "type": "boolean",
-              "default": true
-            },
-            "fields": {
-              "description": "Which facts the coding-agent box shows, in order. version = pi's own version; the thinking level trails the model value.",
-              "type": "array",
-              "items": {
-                "enum": [
-                  "version",
-                  "model",
-                  "gif",
-                  "frames"
-                ]
-              }
-            }
-          }
-        },
-        "resources": {
-          "type": "object",
-          "additionalProperties": true,
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "default": true
-            },
-            "sections": {
-              "description": "Which resource groups the right-hand box lists.",
-              "type": "array",
-              "items": {
-                "enum": [
-                  "context",
-                  "skills",
-                  "extensions"
-                ]
-              }
-            },
             "width": {
-              "description": "Preferred width of the resources box; 'auto' shares the row with the info box.",
-              "oneOf": [
-                {
-                  "type": "integer",
-                  "minimum": 16,
-                  "maximum": 200
-                },
-                {
-                  "const": "auto"
-                }
-              ],
-              "default": "auto"
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 12,
+              "default": 2
             },
             "height": {
-              "description": "Preferred height of the resources box; 'auto' grows with the content.",
-              "oneOf": [
-                {
-                  "type": "integer",
-                  "minimum": 4,
-                  "maximum": 40
-                },
-                {
-                  "const": "auto"
-                }
-              ],
-              "default": "auto"
-            },
-            "maxLinesPerSection": {
-              "description": "Lines each section may use before its items get truncated.",
               "type": "integer",
-              "minimum": 1,
-              "maximum": 40,
-              "default": 6
+              "minimum": 0,
+              "maximum": 12,
+              "default": 1
             }
           }
         }
+      ],
+      "default": {
+        "width": 2,
+        "height": 1
       }
+    },
+    "variableWidth": {
+      "description": "true = the root may grow past `width` to fit the content; false = `width` is a ceiling and wider content is truncated.",
+      "type": "boolean",
+      "default": false
+    },
+    "variableHeight": {
+      "description": "false (default) = the root stays `height` tall and marks what does not fit (`...` for a dropped heading, `  ...` for a dropped item). true = the box grows until the content fits and never writes a marker.",
+      "type": "boolean",
+      "default": false
+    },
+    "compactWidth": {
+      "description": "Below this terminal width the whole splash degrades to three plain lines.",
+      "type": "integer",
+      "minimum": 20,
+      "maximum": 80,
+      "default": 32
+    },
+    "layout": {
+      "description": "Root of the splash tree. Default: chafa artwork above the CODING AGENT card on the left, RESOURCES on the right.",
+      "$ref": "#/definitions/layoutNode"
     },
     "theme": {
       "description": "Colours of the boxes. Every role is optional; unset roles fall back to theme.preset, which defaults to the built-in tokyonight palette.",
@@ -197,12 +272,12 @@
           "default": "tokyonight"
         },
         "windowTitle": {
-          "description": "Box titles: RESOURCES, (pi) CODING AGENT, IMAGE. Hex \"#rgb\" or \"#rrggbb\".",
+          "description": "Box titles: RESOURCES, CODING AGENT, IMAGE. Hex \"#rgb\" or \"#rrggbb\".",
           "type": "string",
           "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"
         },
         "sectionTitle": {
-          "description": "Section headings inside the RESOURCES box: [Context], [Skills], [Extensions] (and [Version], [Model] inside the info card).",
+          "description": "Section headings inside a window: [Context], [Version], …",
           "type": "string",
           "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"
         },
@@ -212,7 +287,7 @@
           "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"
         },
         "content": {
-          "description": "Body text: info values, resource names, the status line. Overrides the text/muted/dim trio with one colour.",
+          "description": "Body text: values, resource names, the status line. Overrides the text/muted/dim trio with one colour.",
           "type": "string",
           "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$"
         }
